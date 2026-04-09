@@ -1,6 +1,6 @@
 # 音樂分源程式
 
-自動將音樂拆分為人聲、鼓、貝斯、吉他、鋼琴、其他六條音軌，並提供混音播放、音量調整、MP3 下載與簡譜生成功能。
+自動將音樂拆分為人聲、鼓、貝斯、吉他、鋼琴、其他六條音軌，並提供混音播放、音量調整、MP3 下載、MIDI 分析、簡譜與五線譜生成功能。
 
 ---
 
@@ -33,7 +33,6 @@ winget install ffmpeg
 ### 2. 安裝 Python 套件
 
 ```bash
-cd D:\claudeCode\music-splitter
 pip install -r requirements.txt
 ```
 
@@ -60,6 +59,8 @@ python main.py
 3. 勾選要分離的音軌（預設全選）
 4. 點擊「開始分離」
 
+---
+
 ### 分源結果頁（Mixer）
 
 分源完成後進入 Mixer 頁面，每條音軌顯示為一列：
@@ -67,12 +68,12 @@ python main.py
 | 元件 | 說明 |
 |------|------|
 | 波形圖 | 顯示音訊振幅，播放時有進度線 |
-| ▶ 播放 | 獨立播放該音軌（不受 M/S 影響） |
+| ▶ 播放 | 獨立播放該音軌 |
 | M | 靜音（Mute）—整體播放時排除此軌 |
 | S | 獨奏（Solo）—整體播放時只聽此軌 |
 | 音量滑桿 | 0–150%，即時調整 |
 | ⬇ MP3 | 下載此音軌（套用目前音量，MP3 320kbps） |
-| ♩ 簡譜 | 自動分析音高並生成簡譜（適合人聲軌） |
+| ♪ MIDI | 人聲軌專屬：開啟 MIDI 分析視窗 |
 
 ### 整體控制列
 
@@ -83,16 +84,43 @@ python main.py
 | 整體音量 | 疊加在各軌音量之上 |
 | ⬇ 下載混音 MP3 320k | 依目前音量/靜音狀態混音後下載 |
 
-### 簡譜生成
+---
 
-點擊任意音軌的「♩ 簡譜」按鈕後：
+### MIDI 分析視窗（人聲軌專屬）
 
-1. 程式自動偵測音高、速度、調性
-2. 生成簡譜圖像顯示於視窗中
-3. 可手動調整「調性」與「速度」後點擊「重新生成」
-4. 點擊「⬇ 儲存 PNG」匯出圖片
+點擊人聲軌的「♪ MIDI」按鈕後開啟，功能如下：
 
-> **注意：** 自動轉譜準確度受錄音品質影響，建議以人聲音軌為主，結果可能需要人工微調。
+| 功能 | 說明 |
+|------|------|
+| 音高分析 | 使用 librosa pyin 偵測音高，music21 量化節奏 |
+| 波形顯示 | 分析完成後顯示人聲音軌波形 |
+| ▶ 播放 MIDI | 播放由分析結果合成的 MIDI 音頻（三角波合成） |
+| 📜 五線譜 | 開啟五線譜視窗（verovio 渲染，在瀏覽器顯示） |
+| ♩ 簡譜 | 開啟簡譜視窗（matplotlib 渲染） |
+| 調性 / 速度 | 手動指定調性與 BPM，重新轉換音符 |
+
+> 分析過程包含：BPM 偵測 → pyin 音高分析 → 音符分割 → 調性偵測 → music21 節奏量化
+
+---
+
+### 五線譜視窗
+
+- 使用 **music21** 建立樂譜資料，**verovio** 渲染為 SVG
+- 渲染完成後自動以**系統預設瀏覽器**開啟（Chrome / Edge / Firefox 均可）
+- 標題顯示來源檔案名稱
+- 支援儲存 SVG 檔案
+
+---
+
+### 簡譜視窗
+
+- 使用 **music21** 量化節奏（支援三連音、切分音）
+- **matplotlib** 渲染為 PNG 圖像，顯示於可捲動視窗中
+- 可手動調整「調性」與「速度」後點擊「重新生成」
+- 標題顯示來源檔案名稱
+- 支援儲存 PNG 圖片
+
+> **注意：** 自動轉譜準確度受錄音品質影響，建議以人聲音軌為主，複雜裝飾音等需人工校正。
 
 ---
 
@@ -112,22 +140,25 @@ python main.py
 music-splitter/
 ├── main.py                  # 程式進入點
 ├── requirements.txt         # 依賴套件
-├── PLAN.md                  # 規劃文件
-├── README.md
 ├── core/
 │   ├── separator.py         # Demucs 分源（背景執行緒）
 │   ├── player.py            # 多軌同步播放引擎
 │   ├── mixer.py             # 混音邏輯
 │   ├── exporter.py          # MP3 匯出
-│   ├── transcriber.py       # 音高偵測 → 簡譜音符
-│   └── jianpu_renderer.py   # 簡譜渲染（matplotlib）
+│   ├── transcriber.py       # 音高偵測 + music21 節奏量化 → JianpuNote
+│   ├── jianpu_renderer.py   # 簡譜渲染（matplotlib）
+│   ├── staff_renderer.py    # 五線譜渲染（music21 + verovio → SVG）
+│   ├── midi_synth.py        # MIDI 合成（三角波）
+│   └── piano_roll.py        # Piano Roll 圖（備用）
 └── ui/
     ├── main_window.py       # 主視窗
     ├── result_view.py       # Mixer 頁面
     ├── track_channel.py     # 單一音軌列
-    ├── waveform_widget.py   # 波形圖
+    ├── waveform_widget.py   # 波形圖 Widget
     ├── progress_dialog.py   # 分源進度
+    ├── midi_view.py         # MIDI 分析視窗
     ├── jianpu_view.py       # 簡譜視窗
+    ├── score_view.py        # 五線譜視窗
     └── styles.qss           # 深色主題樣式
 ```
 
@@ -135,45 +166,25 @@ music-splitter/
 
 ## 建置 Windows 安裝檔
 
-若要將程式打包成 `.exe` 安裝檔，需要額外安裝以下工具：
+若要將程式打包成 `.exe` 安裝檔，需要額外安裝：
 
-| 工具 | 用途 | 下載 |
-|------|------|------|
+| 工具 | 用途 | 安裝方式 |
+|------|------|---------|
 | PyInstaller | 將 Python 打包成執行檔 | `pip install pyinstaller` |
 | Inno Setup 6 | 建立 Windows 安裝精靈 | https://jrsoftware.org/isinfo.php |
 
-### 建置步驟
-
 ```bash
-# 確認在虛擬環境中，且已安裝所有套件
-pip install -r requirements.txt
-
-# 執行建置腳本（一鍵完成所有步驟）
 build.bat
 ```
 
-建置腳本會依序執行：
-1. 安裝 / 升級 PyInstaller
-2. 清除舊的建置資料
-3. PyInstaller 打包（約 10–20 分鐘）
-4. Inno Setup 建立安裝檔
-
-### 輸出位置
+建置腳本會依序：清除舊建置 → PyInstaller 打包 → Inno Setup 封裝安裝檔。
 
 | 輸出 | 位置 |
 |------|------|
 | 執行檔資料夾 | `dist\MusicSplitter\` |
 | Windows 安裝檔 | `dist\installer\音樂分源程式_安裝檔_v1.0.0.exe` |
 
-> **注意：** 因包含 PyTorch 與 Demucs，打包後總大小約 **500–800 MB**，安裝檔壓縮後約 **300–500 MB**，屬正常現象。
-
-### 相關檔案
-
-| 檔案 | 說明 |
-|------|------|
-| `build.spec` | PyInstaller 設定（可調整排除套件、圖示等） |
-| `installer.iss` | Inno Setup 腳本（可調整安裝路徑、捷徑等） |
-| `build.bat` | 一鍵建置腳本 |
+> 因包含 PyTorch 與 Demucs，打包後總大小約 **500–800 MB**。
 
 ---
 
@@ -183,10 +194,13 @@ build.bat
 A：FFmpeg 尚未安裝或未加入 PATH，請依照上方安裝步驟操作。
 
 **Q：分源速度很慢？**
-A：未偵測到 CUDA GPU，目前以 CPU 執行。確認已安裝 NVIDIA 驅動與對應版本的 PyTorch（含 CUDA）。
+A：未偵測到 CUDA GPU，目前以 CPU 執行。請確認已安裝對應版本的 PyTorch（含 CUDA）。
 
-**Q：簡譜結果不準確？**
-A：自動轉譜為估算結果，可在簡譜視窗中手動調整調性與速度後重新生成。複雜裝飾音、滑音等需人工校正。
+**Q：五線譜/簡譜結果不準確？**
+A：自動轉譜為估算結果，可在視窗中手動調整調性與速度後重新生成。複雜裝飾音、滑音需人工校正。
 
 **Q：首次執行卡住？**
 A：正在下載 Demucs 模型（約 300 MB），請耐心等待並確保網路連線穩定。
+
+**Q：五線譜視窗打開後沒有內容？**
+A：請確認已安裝 `music21` 與 `verovio`（`pip install music21 verovio`），且系統有安裝瀏覽器。
