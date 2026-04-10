@@ -14,37 +14,41 @@
 
 ## 安裝步驟
 
-### 1. 安裝 FFmpeg
+### 方法一：一鍵安裝（推薦）
 
-**方法一（推薦）：**
-```bash
-winget install ffmpeg
-```
+直接雙擊 **`setup.bat`**，腳本會自動：
 
-**方法二（手動）：**
-1. 前往 https://ffmpeg.org/download.html 下載 Windows 版本
-2. 解壓後將 `bin` 資料夾路徑加入系統環境變數 `PATH`
-3. 或直接解壓至 `C:\ffmpeg\`（程式會自動偵測此路徑）
+1. 檢查 Python 3.10+，沒有則自動安裝
+2. 檢查 FFmpeg，沒有則自動安裝
+3. 偵測 NVIDIA GPU，有則自動安裝 CUDA 版 PyTorch（速度提升 10–20 倍）
+4. 安裝所有 Python 套件（已裝的自動跳過）
+5. 驗證安裝結果
 
-安裝完成後重新開啟終端機。
+> 首次安裝需下載 PyTorch、Demucs 等大型套件，視網路速度約需 10–30 分鐘。
 
 ---
 
-### 2. 安裝 Python 套件
+### 方法二：手動安裝
 
+**步驟 1 — 安裝 FFmpeg**
+```bash
+winget install ffmpeg
+```
+或手動下載後將 `bin` 資料夾加入系統 `PATH`，或解壓至 `C:\ffmpeg\`。
+
+**步驟 2 — 安裝 Python 套件**
 ```bash
 pip install -r requirements.txt
 ```
 
-> 首次安裝時間較長（需下載 PyTorch、Demucs 等大型套件）。
-
 ---
 
-### 3. 執行程式
+### 執行程式
 
 ```bash
 python main.py
 ```
+或雙擊 **`啟動.bat`**。
 
 > **首次執行**會自動下載 Demucs `htdemucs_6s` 模型（約 300 MB），請確保網路連線正常。
 
@@ -190,8 +194,11 @@ build.bat
 
 ## 常見問題
 
+**Q：安裝腳本 setup.bat 執行沒有反應或閃退？**
+A：請用滑鼠右鍵點 `setup.bat` → 「以系統管理員身分執行」，部分系統安裝 winget 套件需要管理員權限。
+
 **Q：出現「Couldn't find ffmpeg」警告？**
-A：FFmpeg 尚未安裝或未加入 PATH，請依照上方安裝步驟操作。
+A：FFmpeg 尚未安裝或未加入 PATH。執行 `setup.bat` 會自動處理；或手動執行 `winget install ffmpeg`。
 
 **Q：分源速度很慢？**
 A：未偵測到 CUDA GPU，目前以 CPU 執行。請確認已安裝對應版本的 PyTorch（含 CUDA）。
