@@ -72,8 +72,15 @@ class TranscriberThread(QThread):
         try:
             mono = self.audio.mean(axis=1) if self.audio.ndim == 2 else self.audio
 
+            # 降採樣到 22050 Hz，減少分析計算量（加速 4x）
+            ANALYSIS_SR = 22050
+            self.progress.emit("音頻前處理中...", 5)
+            if self.sr != ANALYSIS_SR:
+                mono = librosa.resample(mono, orig_sr=self.sr, target_sr=ANALYSIS_SR)
+            sr = ANALYSIS_SR
+
             self.progress.emit("偵測節拍（BPM）...", 10)
-            tempo, _ = librosa.beat.beat_track(y=mono, sr=self.sr)
+            tempo, _ = librosa.beat.beat_track(y=mono, sr=sr, hop_length=512)
             tempo = float(np.atleast_1d(tempo)[0])
             if tempo < 50:
                 tempo *= 2
@@ -86,10 +93,10 @@ class TranscriberThread(QThread):
                 mono,
                 fmin=librosa.note_to_hz('C2'),
                 fmax=librosa.note_to_hz('C7'),
-                sr=self.sr,
+                sr=sr,
                 hop_length=512,
             )
-            times = librosa.times_like(f0, sr=self.sr, hop_length=512)
+            times = librosa.times_like(f0, sr=sr, hop_length=512)
 
             self.progress.emit("分割音符...", 65)
             raw = _segment_notes(f0, voiced, times, beat_dur)
