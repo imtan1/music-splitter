@@ -79,26 +79,19 @@ foreach ($c in @("python","py","python3")) {
 }
 
 if (-not $PyCmd) {
-    Info "Python not found, trying winget..."
-    $ok1, $out1 = TryRun "winget" @("install","--id","Python.Python.3.11","--silent","--accept-package-agreements","--accept-source-agreements","--scope","machine")
-
-    if (-not $ok1) {
-        Warn "winget failed ($out1), trying direct download..."
-        $pyExe = "$env:TEMP\python-3.11.9-amd64.exe"
-        $dlOk = Download "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" $pyExe
-        if ($dlOk -and (Test-Path $pyExe)) {
-            Info "Running Python installer..."
-            $p = Start-Process -FilePath $pyExe -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait -PassThru
-            if ($p.ExitCode -ne 0) {
-                Fail "Python installer failed (exit $($p.ExitCode)). Install manually: https://www.python.org/downloads/"
-            }
-            Remove-Item $pyExe -ErrorAction SilentlyContinue
-            Ok "Python installed via direct download"
-        } else {
-            Fail "Cannot download Python. Install manually: https://www.python.org/downloads/"
+    Info "Python not found, downloading installer..."
+    $pyExe = "$env:TEMP\python-3.11.9-amd64.exe"
+    $dlOk = Download "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe" $pyExe
+    if ($dlOk -and (Test-Path $pyExe)) {
+        Info "Running Python installer..."
+        $p = Start-Process -FilePath $pyExe -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait -PassThru
+        if ($p.ExitCode -ne 0) {
+            Fail "Python installer failed (exit $($p.ExitCode)). Install manually: https://www.python.org/downloads/"
         }
+        Remove-Item $pyExe -ErrorAction SilentlyContinue
+        Ok "Python installed"
     } else {
-        Ok "Python installed via winget"
+        Fail "Cannot download Python. Install manually: https://www.python.org/downloads/"
     }
 
     # Refresh PATH
@@ -138,46 +131,31 @@ if (-not $FfOk -and (Test-Path "C:\ffmpeg\bin\ffmpeg.exe")) {
 }
 
 if (-not $FfOk) {
-    Info "FFmpeg not found, trying winget..."
-    $ok2, $out2 = TryRun "winget" @("install","--id","Gyan.FFmpeg","--silent","--accept-package-agreements","--accept-source-agreements")
+    Info "FFmpeg not found, downloading directly..."
+    $ffZip  = "$env:TEMP\ffmpeg.zip"
+    $ffDest = "C:\ffmpeg"
+    $dlOk = Download "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" $ffZip
 
-    # Refresh PATH and check again
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-    $chk, $null = TryRun "ffmpeg" @("-version")
-    if ($chk) {
-        $FfOk = $true
-        Ok "FFmpeg installed via winget"
-        $ffPath = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
-        if ($ffPath) { Ok "Installed at: $(Split-Path -Parent $ffPath)" }
-    }
+    if ($dlOk -and (Test-Path $ffZip)) {
+        Info "Extracting FFmpeg to C:\ffmpeg ..."
+        $ffTmp = "$env:TEMP\ffmpeg_extract"
+        if (Test-Path $ffDest) { Remove-Item $ffDest -Recurse -Force }
+        if (Test-Path $ffTmp)  { Remove-Item $ffTmp  -Recurse -Force }
+        Expand-Archive -Path $ffZip -DestinationPath $ffTmp -Force
+        $inner = Get-ChildItem $ffTmp -Directory | Select-Object -First 1
+        Move-Item $inner.FullName $ffDest
+        Remove-Item $ffZip -ErrorAction SilentlyContinue
+        Remove-Item $ffTmp -Recurse -ErrorAction SilentlyContinue
 
-    if (-not $FfOk) {
-        Warn "winget failed ($out2), downloading FFmpeg directly..."
-        $ffZip  = "$env:TEMP\ffmpeg.zip"
-        $ffDest = "C:\ffmpeg"
-        $dlOk = Download "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" $ffZip
-
-        if ($dlOk -and (Test-Path $ffZip)) {
-            Info "Extracting FFmpeg to C:\ffmpeg ..."
-            $ffTmp = "$env:TEMP\ffmpeg_extract"
-            if (Test-Path $ffDest) { Remove-Item $ffDest -Recurse -Force }
-            if (Test-Path $ffTmp)  { Remove-Item $ffTmp  -Recurse -Force }
-            Expand-Archive -Path $ffZip -DestinationPath $ffTmp -Force
-            $inner = Get-ChildItem $ffTmp -Directory | Select-Object -First 1
-            Move-Item $inner.FullName $ffDest
-            Remove-Item $ffZip -ErrorAction SilentlyContinue
-            Remove-Item $ffTmp -Recurse -ErrorAction SilentlyContinue
-
-            $syspath = [System.Environment]::GetEnvironmentVariable("Path","Machine")
-            if ($syspath -notlike "*C:\ffmpeg\bin*") {
-                [System.Environment]::SetEnvironmentVariable("Path","$syspath;C:\ffmpeg\bin","Machine")
-            }
-            $env:Path = "C:\ffmpeg\bin;" + $env:Path
-            Ok "FFmpeg installed to C:\ffmpeg"
-            Ok "Installed at: C:\ffmpeg\bin"
-        } else {
-            Fail "Cannot download FFmpeg. Install manually: winget install ffmpeg"
+        $syspath = [System.Environment]::GetEnvironmentVariable("Path","Machine")
+        if ($syspath -notlike "*C:\ffmpeg\bin*") {
+            [System.Environment]::SetEnvironmentVariable("Path","$syspath;C:\ffmpeg\bin","Machine")
         }
+        $env:Path = "C:\ffmpeg\bin;" + $env:Path
+        Ok "FFmpeg installed to C:\ffmpeg"
+        Ok "Installed at: C:\ffmpeg\bin"
+    } else {
+        Fail "Cannot download FFmpeg. Install manually: https://ffmpeg.org/download.html"
     }
 }
 
