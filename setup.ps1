@@ -110,6 +110,8 @@ if (-not $PyCmd) {
             if ($LASTEXITCODE -eq 0 -and "$v" -match "Python 3\.(\d+)" -and [int]$Matches[1] -ge 10) {
                 $PyCmd = $c
                 Ok "Python confirmed: $v"
+                $pyPath = (Get-Command $c -ErrorAction SilentlyContinue).Source
+                if ($pyPath) { Ok "Installed at: $(Split-Path -Parent $pyPath)" }
                 break
             }
         } catch {}
@@ -145,6 +147,8 @@ if (-not $FfOk) {
     if ($chk) {
         $FfOk = $true
         Ok "FFmpeg installed via winget"
+        $ffPath = (Get-Command ffmpeg -ErrorAction SilentlyContinue).Source
+        if ($ffPath) { Ok "Installed at: $(Split-Path -Parent $ffPath)" }
     }
 
     if (-not $FfOk) {
@@ -170,6 +174,7 @@ if (-not $FfOk) {
             }
             $env:Path = "C:\ffmpeg\bin;" + $env:Path
             Ok "FFmpeg installed to C:\ffmpeg"
+            Ok "Installed at: C:\ffmpeg\bin"
         } else {
             Fail "Cannot download FFmpeg. Install manually: winget install ffmpeg"
         }
