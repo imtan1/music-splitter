@@ -94,11 +94,12 @@ class TranscriberThread(QThread):
             beat_dur = 60.0 / tempo
 
             # parselmouth (Praat) 音高偵測，比 librosa pyin/yin 快幾百倍
-            self.progress.emit("音高分析中（Praat）...", 25)
             HOP = 512
             try:
                 import parselmouth
+                self.progress.emit("音高分析中（建立音頻物件）...", 20)
                 snd = parselmouth.Sound(mono.astype(np.float64), sampling_frequency=sr)
+                self.progress.emit("音高分析中（Praat 運算中）...", 25)
                 pitch_obj = snd.to_pitch_ac(
                     time_step=HOP / sr,
                     pitch_floor=librosa.note_to_hz('C2'),
