@@ -88,8 +88,10 @@ class TranscriberThread(QThread):
             else:
                 sr = self.sr
 
+            # beat_track 只需要前 60 秒就夠準確，避免長音頻卡住
             self.progress.emit("偵測節拍（BPM）...", 10)
-            tempo, _ = librosa.beat.beat_track(y=mono, sr=sr, hop_length=512)
+            mono_short = mono[:sr * 60]
+            tempo, _ = librosa.beat.beat_track(y=mono_short, sr=sr, hop_length=512)
             tempo = float(np.atleast_1d(tempo)[0])
             if tempo < 50:
                 tempo *= 2
@@ -97,15 +99,33 @@ class TranscriberThread(QThread):
                 tempo /= 2
             beat_dur = 60.0 / tempo
 
-            self.progress.emit("音高分析中（pyin，需要一點時間）...", 25)
-            f0, voiced, _ = librosa.pyin(
-                mono,
-                fmin=librosa.note_to_hz('C2'),
-                fmax=librosa.note_to_hz('C7'),
-                sr=sr,
-                hop_length=512,
-            )
-            times = librosa.times_like(f0, sr=sr, hop_length=512)
+            # pyin 分段處理，每 30 秒一段，讓進度條持續更新
+            HOP = 512
+            CHUNK_SEC = 30
+            chunk_size = sr * CHUNK_SEC
+            total_samples = len(mono)
+            n_chunks = max(1, (total_samples + chunk_size - 1) // chunk_size)
+
+            f0_parts, voiced_parts = [], []
+            for i in range(n_chunks):
+                pct = 25 + int(40 * i / n_chunks)
+                self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
+                start = i * chunk_size
+                end = min(start + chunk_size, total_samples)
+                chunk = mono[start:end]
+                f0_c, v_c, _ = librosa.pyin(
+                    chunk,
+                    fmin=librosa.note_to_hz('C2'),
+                    fmax=librosa.note_to_hz('C7'),
+                    sr=sr,
+                    hop_length=HOP,
+                )
+                f0_parts.append(f0_c)
+                voiced_parts.append(v_c)
+
+            f0 = np.concatenate(f0_parts)
+            voiced = np.concatenate(voiced_parts)
+            times = librosa.times_like(f0, sr=sr, hop_length=HOP)
 
             self.progress.emit("分割音符...", 65)
             raw = _segment_notes(f0, voiced, times, beat_dur)
