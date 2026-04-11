@@ -1,6 +1,6 @@
 """
 音頻 → 簡譜音符轉換
-使用 librosa pyin 偵測音高，music21 做節奏量化。
+使用 parselmouth (Praat) 偵測音高，music21 做節奏量化。
 """
 import numpy as np
 from PySide6.QtCore import QThread, Signal
@@ -88,44 +88,55 @@ class TranscriberThread(QThread):
             else:
                 sr = self.sr
 
-            # beat_track 只需要前 60 秒就夠準確，避免長音頻卡住
+            # 用 RMS envelope 自相關法估 BPM（不用 STFT，速度快）
             self.progress.emit("偵測節拍（BPM）...", 10)
-            mono_short = mono[:sr * 60]
-            tempo, _ = librosa.beat.beat_track(y=mono_short, sr=sr, hop_length=512)
-            tempo = float(np.atleast_1d(tempo)[0])
-            if tempo < 50:
-                tempo *= 2
-            if tempo > 200:
-                tempo /= 2
+            tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
             beat_dur = 60.0 / tempo
 
-            # pyin 分段處理，每 30 秒一段，讓進度條持續更新
+            # parselmouth (Praat) 音高偵測，比 librosa pyin/yin 快幾百倍
+            self.progress.emit("音高分析中（Praat）...", 25)
             HOP = 512
-            CHUNK_SEC = 30
-            chunk_size = sr * CHUNK_SEC
-            total_samples = len(mono)
-            n_chunks = max(1, (total_samples + chunk_size - 1) // chunk_size)
-
-            f0_parts, voiced_parts = [], []
-            for i in range(n_chunks):
-                pct = 25 + int(40 * i / n_chunks)
-                self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
-                start = i * chunk_size
-                end = min(start + chunk_size, total_samples)
-                chunk = mono[start:end]
-                f0_c, v_c, _ = librosa.pyin(
-                    chunk,
-                    fmin=librosa.note_to_hz('C2'),
-                    fmax=librosa.note_to_hz('C7'),
-                    sr=sr,
-                    hop_length=HOP,
+            try:
+                import parselmouth
+                snd = parselmouth.Sound(mono.astype(np.float64), sampling_frequency=sr)
+                pitch_obj = snd.to_pitch_ac(
+                    time_step=HOP / sr,
+                    pitch_floor=librosa.note_to_hz('C2'),
+                    pitch_ceiling=librosa.note_to_hz('C7'),
                 )
-                f0_parts.append(f0_c)
-                voiced_parts.append(v_c)
-
-            f0 = np.concatenate(f0_parts)
-            voiced = np.concatenate(voiced_parts)
-            times = librosa.times_like(f0, sr=sr, hop_length=HOP)
+                self.progress.emit("整理音高資料...", 55)
+                # 用 selected_array 一次取出所有 frame，比 Python loop 快
+                f0 = pitch_obj.selected_array['frequency'].astype(np.float32)
+                voiced = f0 > 0
+                n_frames = len(f0)
+                t_start = pitch_obj.start_time
+                t_step = pitch_obj.time_step
+                times = (t_start + np.arange(n_frames) * t_step).astype(np.float32)
+            except ImportError:
+                # fallback: librosa pyin 分段處理
+                CHUNK_SEC = 30
+                chunk_size = sr * CHUNK_SEC
+                total_samples = len(mono)
+                n_chunks = max(1, (total_samples + chunk_size - 1) // chunk_size)
+                f0_parts, voiced_parts = [], []
+                for i in range(n_chunks):
+                    pct = 25 + int(30 * i / n_chunks)
+                    self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
+                    start = i * chunk_size
+                    end = min(start + chunk_size, total_samples)
+                    chunk = mono[start:end]
+                    f0_c, v_c, _ = librosa.pyin(
+                        chunk,
+                        fmin=librosa.note_to_hz('C2'),
+                        fmax=librosa.note_to_hz('C7'),
+                        sr=sr,
+                        hop_length=HOP,
+                    )
+                    f0_parts.append(f0_c)
+                    voiced_parts.append(v_c)
+                f0 = np.concatenate(f0_parts)
+                voiced = np.concatenate(voiced_parts)
+                times = librosa.times_like(f0, sr=sr, hop_length=HOP)
 
             self.progress.emit("分割音符...", 65)
             raw = _segment_notes(f0, voiced, times, beat_dur)
@@ -156,33 +167,84 @@ def convert_raw_to_jianpu(raw_notes: list, key: str, beat_dur: float) -> list:
 # 內部實作
 # ──────────────────────────────────────────────
 
-def _segment_notes(f0, voiced, times, beat_dur):
-    import librosa
+def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> float:
+    """
+    用 RMS envelope 自相關法快速估 BPM，不需要 STFT。
+    輸入最多 10 秒的 mono 音頻。若偵測失敗則回傳 default。
+    """
+    HOP = 256
+    rms = np.array([float(np.sqrt(np.mean(mono[i:i + HOP] ** 2)))
+                    for i in range(0, len(mono) - HOP, HOP)], dtype=np.float32)
+    rms -= rms.mean()
+    if rms.std() < 1e-6:
+        return default
 
+    corr = np.correlate(rms, rms, mode='full')[len(rms) - 1:]
+    # 搜尋範圍：40–200 BPM
+    lo = max(1, int(60.0 / 200 * sr / HOP))
+    hi = int(60.0 / 40 * sr / HOP)
+    hi = min(hi, len(corr) - 1)
+    if lo >= hi:
+        return default
+
+    peak = int(np.argmax(corr[lo:hi])) + lo
+    beat_period = peak * HOP / sr
+    tempo = 60.0 / beat_period if beat_period > 0 else default
+
+    # 太偏離合理範圍就用預設
+    if tempo < 50 or tempo > 220:
+        return default
+    return float(tempo)
+
+
+def _segment_notes(f0, voiced, times, beat_dur):
+    """向量化音符分割，避免 Python loop。"""
     min_dur = beat_dur * 0.12
-    midi = np.where(voiced,
-                    librosa.hz_to_midi(np.where(voiced, f0, 440.0)),
-                    np.nan)
+
+    # hz -> midi，只對 voiced frames 計算
+    midi_f = np.full(len(f0), np.nan, dtype=np.float32)
+    v_idx = np.where(voiced)[0]
+    if len(v_idx):
+        midi_f[v_idx] = 12.0 * np.log2(f0[v_idx] / 440.0) + 69.0
+    midi_r = np.where(voiced, np.round(midi_f).astype(np.float32), np.nan)
+
+    # 找出 voiced/unvoiced 段落邊界
+    voiced_int = voiced.astype(np.int8)
+    # 在頭尾加 0，讓 diff 能偵測開頭/結尾的段落
+    padded = np.concatenate([[0], voiced_int, [0]])
+    diff = np.diff(padded.astype(np.int16))
+    starts = np.where(diff == 1)[0]   # voiced 段開始
+    ends   = np.where(diff == -1)[0]  # voiced 段結束（不含）
+
+    uv_starts = np.where(diff == -1)[0]   # unvoiced 段開始
+    uv_ends   = np.where(diff == 1)[0]    # unvoiced 段結束（不含）
+
     notes = []
-    i = 0
-    while i < len(voiced):
-        if not voiced[i]:
-            j = i + 1
-            while j < len(voiced) and not voiced[j]:
-                j += 1
-            dur = float(times[j - 1] - times[i]) if j > i else 0.0
-            if dur > min_dur:
-                notes.append({'midi': None, 'start': float(times[i]), 'dur': dur})
-            i = j
-        else:
-            pitch = round(float(midi[i]))
-            j = i + 1
-            while j < len(voiced) and voiced[j] and abs(float(midi[j]) - pitch) < 0.8:
-                j += 1
-            dur = float(times[j - 1] - times[i]) if j > i else 0.0
-            if dur > min_dur:
-                notes.append({'midi': pitch, 'start': float(times[i]), 'dur': dur})
-            i = j
+
+    # voiced 段
+    for s, e in zip(starts, ends):
+        if e <= s:
+            continue
+        dur = float(times[e - 1] - times[s])
+        if dur < min_dur:
+            continue
+        seg_midi = midi_r[s:e]
+        seg_midi = seg_midi[~np.isnan(seg_midi)]
+        if len(seg_midi) == 0:
+            continue
+        pitch = int(round(float(np.median(seg_midi))))
+        notes.append({'midi': pitch, 'start': float(times[s]), 'dur': dur})
+
+    # unvoiced 段
+    for s, e in zip(uv_starts, uv_ends):
+        if e <= s:
+            continue
+        dur = float(times[e - 1] - times[s])
+        if dur < min_dur:
+            continue
+        notes.append({'midi': None, 'start': float(times[s]), 'dur': dur})
+
+    notes.sort(key=lambda n: n['start'])
     return notes
 
 
