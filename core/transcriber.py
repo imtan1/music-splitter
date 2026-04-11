@@ -72,12 +72,21 @@ class TranscriberThread(QThread):
         try:
             mono = self.audio.mean(axis=1) if self.audio.ndim == 2 else self.audio
 
-            # 降採樣到 22050 Hz，減少分析計算量（加速 4x）
+            # 降採樣到 22050 Hz，減少分析計算量
+            # 44100→22050 為整數比 2:1，直接每兩個取一個，速度比 librosa.resample 快百倍
             ANALYSIS_SR = 22050
             self.progress.emit("音頻前處理中...", 5)
-            if self.sr != ANALYSIS_SR:
-                mono = librosa.resample(mono, orig_sr=self.sr, target_sr=ANALYSIS_SR)
-            sr = ANALYSIS_SR
+            if self.sr == 44100:
+                mono = mono[::2]
+                sr = ANALYSIS_SR
+            elif self.sr != ANALYSIS_SR:
+                from scipy.signal import resample_poly
+                import math
+                g = math.gcd(self.sr, ANALYSIS_SR)
+                mono = resample_poly(mono, ANALYSIS_SR // g, self.sr // g).astype(np.float32)
+                sr = ANALYSIS_SR
+            else:
+                sr = self.sr
 
             self.progress.emit("偵測節拍（BPM）...", 10)
             tempo, _ = librosa.beat.beat_track(y=mono, sr=sr, hop_length=512)
