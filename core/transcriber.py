@@ -185,21 +185,29 @@ def convert_raw_to_jianpu(raw_notes: list, key: str, beat_dur: float) -> list:
 
 def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> float:
     """
-    用 RMS envelope 自相關法快速估 BPM，不需要 STFT。
+    用 RMS envelope FFT 自相關法快速估 BPM，完全向量化無 Python loop。
     輸入最多 10 秒的 mono 音頻。若偵測失敗則回傳 default。
     """
     HOP = 256
-    rms = np.array([float(np.sqrt(np.mean(mono[i:i + HOP] ** 2)))
-                    for i in range(0, len(mono) - HOP, HOP)], dtype=np.float32)
+    n_hops = (len(mono) - HOP) // HOP
+    if n_hops < 4:
+        return default
+
+    # 向量化 RMS：reshape 後一次計算
+    frames = mono[:n_hops * HOP].reshape(n_hops, HOP)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1)).astype(np.float32)
     rms -= rms.mean()
     if rms.std() < 1e-6:
         return default
 
-    corr = np.correlate(rms, rms, mode='full')[len(rms) - 1:]
+    # FFT 自相關，O(n log n) 不用 np.correlate O(n²)
+    n = len(rms)
+    f = np.fft.rfft(rms, n=2 * n)
+    corr = np.fft.irfft(f * np.conj(f))[:n].real
+
     # 搜尋範圍：40–200 BPM
     lo = max(1, int(60.0 / 200 * sr / HOP))
-    hi = int(60.0 / 40 * sr / HOP)
-    hi = min(hi, len(corr) - 1)
+    hi = min(n - 1, int(60.0 / 40 * sr / HOP))
     if lo >= hi:
         return default
 
@@ -207,7 +215,6 @@ def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> f
     beat_period = peak * HOP / sr
     tempo = 60.0 / beat_period if beat_period > 0 else default
 
-    # 太偏離合理範圍就用預設
     if tempo < 50 or tempo > 220:
         return default
     return float(tempo)
