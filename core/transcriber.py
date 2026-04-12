@@ -93,26 +93,41 @@ class TranscriberThread(QThread):
             tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
             beat_dur = 60.0 / tempo
 
-            # parselmouth (Praat) 音高偵測，比 librosa pyin/yin 快幾百倍
+            # parselmouth (Praat) 音高偵測，分 30 秒段處理讓進度條持續更新
             HOP = 512
+            CHUNK_SEC = 10
             try:
                 import parselmouth
-                self.progress.emit("音高分析中（建立音頻物件）...", 20)
-                snd = parselmouth.Sound(mono.astype(np.float64), sampling_frequency=sr)
-                self.progress.emit("音高分析中（Praat 運算中）...", 25)
-                pitch_obj = snd.to_pitch_ac(
-                    time_step=HOP / sr,
-                    pitch_floor=librosa.note_to_hz('C2'),
-                    pitch_ceiling=librosa.note_to_hz('C7'),
-                )
+                fmin = librosa.note_to_hz('C2')
+                fmax = librosa.note_to_hz('C7')
+                chunk_samples = sr * CHUNK_SEC
+                total_samples = len(mono)
+                n_chunks = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
+                f0_parts, times_parts = [], []
+
+                for i in range(n_chunks):
+                    pct = 20 + int(35 * i / n_chunks)
+                    self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
+                    s = i * chunk_samples
+                    e = min(s + chunk_samples, total_samples)
+                    # 每段各自轉 float64，避免一次性大記憶體分配
+                    chunk = mono[s:e].astype(np.float64)
+                    snd = parselmouth.Sound(chunk, sampling_frequency=sr)
+                    pitch_obj = snd.to_pitch_ac(
+                        time_step=HOP / sr,
+                        pitch_floor=fmin,
+                        pitch_ceiling=fmax,
+                    )
+                    f0_c = pitch_obj.selected_array['frequency'].astype(np.float32)
+                    t_offset = s / sr
+                    t_c = (pitch_obj.start_time + np.arange(len(f0_c)) * pitch_obj.time_step + t_offset).astype(np.float32)
+                    f0_parts.append(f0_c)
+                    times_parts.append(t_c)
+
                 self.progress.emit("整理音高資料...", 55)
-                # 用 selected_array 一次取出所有 frame，比 Python loop 快
-                f0 = pitch_obj.selected_array['frequency'].astype(np.float32)
+                f0 = np.concatenate(f0_parts)
+                times = np.concatenate(times_parts)
                 voiced = f0 > 0
-                n_frames = len(f0)
-                t_start = pitch_obj.start_time
-                t_step = pitch_obj.time_step
-                times = (t_start + np.arange(n_frames) * t_step).astype(np.float32)
             except ImportError:
                 # fallback: librosa pyin 分段處理
                 CHUNK_SEC = 30
