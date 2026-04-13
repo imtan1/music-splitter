@@ -1,6 +1,10 @@
 import sys
 import os
-import threading
+
+# 禁止 numba 初始化 CUDA，避免有 GPU 的機器首次 import librosa 時
+# 花費 2-10 分鐘編譯 CUDA kernel 而造成程式凍結。
+# demucs 使用 PyTorch CUDA，不受此設定影響。
+os.environ.setdefault('NUMBA_DISABLE_CUDA', '1')
 
 # 確保專案根目錄在 import 路徑內
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,18 +15,7 @@ from PySide6.QtCore import Qt
 from ui.main_window import MainWindow
 
 
-def _prewarm_librosa():
-    """背景預熱 librosa / numba JIT，避免首次按 MIDI 按鈕時凍結（GPU 機器尤其明顯）。"""
-    try:
-        import librosa  # noqa: F401
-    except Exception:
-        pass
-
-
 def main():
-    # 啟動背景執行緒預熱，不阻塞 UI
-    threading.Thread(target=_prewarm_librosa, daemon=True).start()
-
     app = QApplication(sys.argv)
     app.setApplicationName("音樂分源程式")
     app.setStyle("Fusion")
