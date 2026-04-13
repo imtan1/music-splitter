@@ -16,6 +16,7 @@ class TrackChannel(QWidget):
     mute_changed = Signal(str, bool)
     solo_changed = Signal(str, bool)
     volume_changed = Signal(str, float)
+    seek_requested = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
 
     def __init__(self, track: TrackState, label: str, parent=None,
                  file_title: str = '', get_tempo=None, get_key=None):
@@ -49,6 +50,7 @@ class TrackChannel(QWidget):
         # 波形圖（佔剩餘寬度）
         self.waveform = WaveformWidget(self.track.audio)
         self.waveform.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.waveform.seek_requested.connect(self.seek_requested)
         row.addWidget(self.waveform)
 
         # 獨立播放鈕

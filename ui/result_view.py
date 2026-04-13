@@ -126,6 +126,7 @@ class ResultView(QWidget):
         self._metronome_track: TrackState | None = None
         self._metronome_channel: MetronomeChannel | None = None
         self._seek_dragging = False
+        self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
 
         # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
         self._metro_rebuild_timer = QTimer(self)
@@ -162,6 +163,7 @@ class ResultView(QWidget):
                 w.deleteLater()
 
         # 更新 BPM / 調性控制（先斷開訊號避免觸發重建）
+        self._base_tempo = max(40.0, min(240.0, float(tempo)))
         self._tempo_spin.valueChanged.disconnect()
         self._tempo_spin.setValue(max(40, min(240, int(tempo))))
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
@@ -180,6 +182,7 @@ class ResultView(QWidget):
                               get_tempo=self.get_tempo, get_key=self.get_key)
             ch.mute_changed.connect(self._on_mute_changed)
             ch.solo_changed.connect(self._on_solo_changed)
+            ch.seek_requested.connect(self._on_waveform_seek)
             # 插在 stretch 之前
             self._channels_layout.insertWidget(self._channels_layout.count() - 1, ch)
             self._channels.append(ch)
@@ -207,6 +210,7 @@ class ResultView(QWidget):
             engine_tracks = tracks
 
         self._engine.load_tracks(engine_tracks)
+        self._engine.set_speed(1.0)   # 重設速度為原速
 
         title = f"分離完成：{source_name}" if source_name else "分離完成"
         self._title_lbl.setText(title)
@@ -277,7 +281,7 @@ class ResultView(QWidget):
         self._tempo_spin.setValue(120)
         self._tempo_spin.setSuffix(" BPM")
         self._tempo_spin.setFixedWidth(100)
-        self._tempo_spin.setToolTip("調整後開啟 MIDI 分析將套用此速度")
+        self._tempo_spin.setToolTip("調整速度：同步改變播放速度與節拍器")
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
         info_row.addWidget(self._tempo_spin)
 
@@ -391,12 +395,27 @@ class ResultView(QWidget):
             ch.set_position(ratio)
         self._seek_dragging = False
 
+    def _on_waveform_seek(self, ratio: float):
+        """波形圖點擊/拖曳 seek。"""
+        self._engine.seek(ratio)
+        for ch in self._channels:
+            ch.set_position(ratio)
+        self._seek_bar.blockSignals(True)
+        self._seek_bar.setValue(int(ratio * 1000))
+        self._seek_bar.blockSignals(False)
+        if self._tracks:
+            total_sec = self._tracks[0].length / self._tracks[0].sample_rate
+            self._update_time_label(ratio, total_sec)
+
     def _on_master_volume_changed(self, value: int):
         self._engine.master_volume = value / 100.0
         self._master_vol_lbl.setText(f"{value}%")
 
-    def _on_tempo_changed(self, _value: int):
-        """BPM 滑桿改動時啟動防抖計時器。"""
+    def _on_tempo_changed(self, value: int):
+        """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
+        if self._base_tempo > 0:
+            speed = value / self._base_tempo
+            self._engine.set_speed(speed)
         self._metro_rebuild_timer.start()
 
     def _rebuild_metronome(self):

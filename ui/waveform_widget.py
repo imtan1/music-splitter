@@ -1,14 +1,17 @@
 import numpy as np
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QPainter, QColor, QPen
+from PySide6.QtCore import Qt, QRect, Signal
+from PySide6.QtGui import QPainter, QColor, QPen, QCursor
 
 
 class WaveformWidget(QWidget):
     """
     繪製單一音軌的波形圖，並顯示播放進度（playhead）。
     audio: float32 numpy array, shape (samples, channels)
+    點擊或拖曳波形圖可 seek 到對應位置。
     """
+
+    seek_requested = Signal(float)   # 0.0 ~ 1.0
 
     WAVEFORM_COLOR = QColor("#7B61FF")
     PLAYED_COLOR   = QColor("#00d4ff")
@@ -20,6 +23,7 @@ class WaveformWidget(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(80)
         self.setMinimumWidth(120)
+        self.setCursor(QCursor(Qt.PointingHandCursor))
         self._peaks: np.ndarray = np.array([])
         self._position = 0.0   # 0.0 ~ 1.0
         self._muted = False
@@ -60,6 +64,24 @@ class WaveformWidget(QWidget):
     def set_muted(self, muted: bool):
         self._muted = muted
         self.update()
+
+    # ------------------------------------------------------------------
+    # Mouse events for seek scrubbing
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            ratio = max(0.0, min(1.0, event.position().x() / self.width()))
+            self._position = ratio
+            self.update()
+            self.seek_requested.emit(ratio)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            ratio = max(0.0, min(1.0, event.position().x() / self.width()))
+            self._position = ratio
+            self.update()
+            self.seek_requested.emit(ratio)
 
     def paintEvent(self, event):
         painter = QPainter(self)

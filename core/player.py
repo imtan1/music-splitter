@@ -35,6 +35,8 @@ class AudioEngine(QObject):
         self._master_volume = 1.0
         self._playing = False
 
+        self._speed = 1.0           # 播放速度倍率，1.0 = 原速
+
         self._timer = QTimer(self)
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._emit_position)
@@ -59,6 +61,19 @@ class AudioEngine(QObject):
     def master_volume(self, v: float):
         self._master_volume = max(0.0, min(2.0, v))
 
+    @property
+    def speed(self):
+        return self._speed
+
+    def set_speed(self, speed: float):
+        """設定播放速度倍率（0.5 ~ 2.0）。若正在播放，重新啟動串流套用新速度。"""
+        self._speed = max(0.25, min(4.0, speed))
+        if self._playing:
+            pos = self._position
+            self.pause()
+            self._position = pos
+            self.play()
+
     def get_position_ratio(self) -> float:
         if self._length == 0:
             return 0.0
@@ -74,8 +89,10 @@ class AudioEngine(QObject):
             self._position = 0
 
         self._playing = True
+        # 用速度倍率調整輸出 samplerate：rate 高 → 播放快（同時音調也會改變）
+        output_sr = int(self.sample_rate * self._speed)
         self._stream = sd.OutputStream(
-            samplerate=self.sample_rate,
+            samplerate=output_sr,
             channels=2,
             dtype="float32",
             callback=self._callback,
