@@ -243,6 +243,7 @@ class MidiView(QDialog):
             label=self._file_title,
             precomputed=(self._raw_notes, notes, tempo, key, beat_dur),
             parent=self,
+            file_title=self._file_title,
         )
         dlg.exec()
 
