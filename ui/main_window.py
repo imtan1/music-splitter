@@ -2,7 +2,7 @@ import os
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QStackedWidget,
-    QCheckBox, QGroupBox, QMessageBox, QFrame,
+    QMessageBox, QFrame,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
@@ -91,20 +91,6 @@ class ImportPage(QWidget):
 
         layout.addSpacing(20)
 
-        # 選擇音軌
-        stems_group = QGroupBox("選擇要分離的音軌")
-        stems_layout = QHBoxLayout(stems_group)
-        stems_layout.setSpacing(16)
-        self._stem_checks: dict[str, QCheckBox] = {}
-        for stem in STEMS:
-            cb = QCheckBox(STEM_LABELS[stem])
-            cb.setChecked(True)
-            stems_layout.addWidget(cb)
-            self._stem_checks[stem] = cb
-        layout.addWidget(stems_group)
-
-        layout.addSpacing(20)
-
         # 開始按鈕
         self._start_btn = QPushButton("✦  開始分離")
         self._start_btn.setObjectName("MasterPlayBtn")
@@ -137,11 +123,7 @@ class ImportPage(QWidget):
             self.set_file(path)
 
     def _on_start(self):
-        selected = [s for s, cb in self._stem_checks.items() if cb.isChecked()]
-        if not selected:
-            QMessageBox.warning(self, "提示", "請至少選擇一個音軌。")
-            return
-        self._on_file_selected(self._file_path, selected)
+        self._on_file_selected(self._file_path, STEMS)
 
 
 class MainWindow(QMainWindow):

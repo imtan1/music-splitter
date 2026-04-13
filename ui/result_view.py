@@ -1,16 +1,108 @@
 import os
+import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QScrollArea, QFileDialog,
     QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 
-from core.player import AudioEngine, TrackState
+from core.player import AudioEngine, TrackState, SingleTrackPlayer
 from core.mixer import mix_tracks
 from core.exporter import export_mp3
 from core.separator import STEM_LABELS
 from ui.track_channel import TrackChannel
+
+def _generate_metronome(total_samples: int, sample_rate: int, bpm: float) -> np.ndarray:
+    """產生節拍器音頻陣列，強拍較高音，弱拍較低音。"""
+    audio = np.zeros((total_samples, 2), dtype=np.float32)
+    beat_samples = max(1, int(round(sample_rate * 60.0 / bpm)))
+    click_dur = int(sample_rate * 0.022)   # 22ms 短促點擊
+
+    t = np.arange(click_dur, dtype=np.float32) / sample_rate
+    decay = 180.0
+
+    # 強拍（每小節第 1 拍）：較高音
+    down_click = (np.sin(2 * np.pi * 1400.0 * t) * np.exp(-decay * t)).astype(np.float32)
+    # 弱拍
+    weak_click = (np.sin(2 * np.pi * 880.0  * t) * np.exp(-decay * t)).astype(np.float32)
+
+    pos, beat_num = 0, 0
+    while pos < total_samples:
+        click = down_click if beat_num % 4 == 0 else weak_click
+        end = min(pos + click_dur, total_samples)
+        chunk = click[:end - pos]
+        audio[pos:end, 0] += chunk
+        audio[pos:end, 1] += chunk
+        pos += beat_samples
+        beat_num += 1
+
+    np.clip(audio, -1.0, 1.0, out=audio)
+    return audio
+
+
+class MetronomeChannel(QWidget):
+    """節拍器控制列：開關 + 音量。"""
+
+    def __init__(self, track: TrackState, parent=None):
+        super().__init__(parent)
+        self.track = track
+        self.track.muted = True          # 預設關閉
+        self.setObjectName("TrackChannel")
+        self.setFixedHeight(60)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._build_ui()
+
+    def _build_ui(self):
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 6, 10, 6)
+        row.setSpacing(12)
+
+        name_lbl = QLabel("節拍器")
+        name_lbl.setFixedWidth(48)
+        name_lbl.setAlignment(Qt.AlignCenter)
+        name_lbl.setObjectName("TrackName")
+        row.addWidget(name_lbl)
+
+        self._toggle_btn = QPushButton("開啟")
+        self._toggle_btn.setCheckable(True)
+        self._toggle_btn.setChecked(False)
+        self._toggle_btn.setFixedWidth(56)
+        self._toggle_btn.setObjectName("MuteBtn")
+        self._toggle_btn.toggled.connect(self._on_toggle)
+        row.addWidget(self._toggle_btn)
+
+        row.addWidget(QLabel("音量："))
+
+        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider.setRange(0, 150)
+        self._vol_slider.setValue(80)
+        self._vol_slider.setFixedWidth(140)
+        self._vol_slider.valueChanged.connect(self._on_volume)
+        row.addWidget(self._vol_slider)
+
+        self._vol_lbl = QLabel("80%")
+        self._vol_lbl.setObjectName("SmallLabel")
+        self._vol_lbl.setFixedWidth(38)
+        row.addWidget(self._vol_lbl)
+
+        row.addStretch()
+
+        hint = QLabel("速度由上方 BPM 控制")
+        hint.setObjectName("SmallLabel")
+        row.addWidget(hint)
+
+        # 套用初始音量
+        self.track.volume = 0.80
+
+    def _on_toggle(self, checked: bool):
+        self.track.muted = not checked
+        self._toggle_btn.setText("關閉" if checked else "開啟")
+
+    def _on_volume(self, value: int):
+        self.track.volume = value / 100.0
+        self._vol_lbl.setText(f"{value}%")
+
 
 ALL_KEYS = [
     '自動偵測',
@@ -31,7 +123,15 @@ class ResultView(QWidget):
 
         self._channels: list[TrackChannel] = []
         self._tracks: list[TrackState] = []
+        self._metronome_track: TrackState | None = None
+        self._metronome_channel: MetronomeChannel | None = None
         self._seek_dragging = False
+
+        # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
+        self._metro_rebuild_timer = QTimer(self)
+        self._metro_rebuild_timer.setSingleShot(True)
+        self._metro_rebuild_timer.setInterval(600)
+        self._metro_rebuild_timer.timeout.connect(self._rebuild_metronome)
 
         self._build_ui()
 
@@ -61,8 +161,10 @@ class ResultView(QWidget):
             if w:
                 w.deleteLater()
 
-        # 更新 BPM / 調性控制
+        # 更新 BPM / 調性控制（先斷開訊號避免觸發重建）
+        self._tempo_spin.valueChanged.disconnect()
         self._tempo_spin.setValue(max(40, min(240, int(tempo))))
+        self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
         display_key = key if key in ALL_KEYS else '自動偵測'
         self._key_combo.setCurrentText(display_key)
 
@@ -83,7 +185,28 @@ class ResultView(QWidget):
             self._channels.append(ch)
 
         self._tracks = tracks
-        self._engine.load_tracks(tracks)
+
+        # 建立節拍器音軌
+        if tracks:
+            total_samples = max(t.length for t in tracks)
+            sr = tracks[0].sample_rate
+            metro_audio = _generate_metronome(total_samples, sr, tempo)
+            self._metronome_track = TrackState('metronome', metro_audio, sr)
+            self._metronome_track.muted = True
+
+            # 移除舊節拍器 widget
+            if self._metronome_channel is not None:
+                self._metronome_channel.deleteLater()
+            self._metronome_channel = MetronomeChannel(self._metronome_track, self)
+            self._channels_layout.insertWidget(
+                self._channels_layout.count() - 1, self._metronome_channel
+            )
+
+            engine_tracks = tracks + [self._metronome_track]
+        else:
+            engine_tracks = tracks
+
+        self._engine.load_tracks(engine_tracks)
 
         title = f"分離完成：{source_name}" if source_name else "分離完成"
         self._title_lbl.setText(title)
@@ -155,6 +278,7 @@ class ResultView(QWidget):
         self._tempo_spin.setSuffix(" BPM")
         self._tempo_spin.setFixedWidth(100)
         self._tempo_spin.setToolTip("調整後開啟 MIDI 分析將套用此速度")
+        self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
         info_row.addWidget(self._tempo_spin)
 
         info_row.addSpacing(20)
@@ -270,6 +394,29 @@ class ResultView(QWidget):
     def _on_master_volume_changed(self, value: int):
         self._engine.master_volume = value / 100.0
         self._master_vol_lbl.setText(f"{value}%")
+
+    def _on_tempo_changed(self, _value: int):
+        """BPM 滑桿改動時啟動防抖計時器。"""
+        self._metro_rebuild_timer.start()
+
+    def _rebuild_metronome(self):
+        """重建節拍器音軌（BPM 變動後觸發）。"""
+        if not self._tracks or self._metronome_track is None:
+            return
+        was_playing = self._engine.is_playing()
+        self._engine.pause()
+
+        tempo = float(self._tempo_spin.value())
+        total_samples = max(t.length for t in self._tracks)
+        sr = self._tracks[0].sample_rate
+        self._metronome_track.audio = _generate_metronome(total_samples, sr, tempo)
+
+        engine_tracks = self._tracks + [self._metronome_track]
+        self._engine.load_tracks(engine_tracks)
+
+        if was_playing:
+            self._engine.play()
+            self._play_btn.setText("⏸ 暫停")
 
     def _on_mute_changed(self, stem_name: str, muted: bool):
         pass  # TrackState 已在 channel 內更新，引擎 callback 自動讀取

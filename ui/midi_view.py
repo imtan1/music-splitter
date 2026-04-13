@@ -6,22 +6,13 @@ MIDI 分析視窗
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QProgressBar,
-    QComboBox, QSpinBox, QMessageBox,
+    QPushButton, QProgressBar, QMessageBox,
 )
 from PySide6.QtCore import QTimer
 
 from core.player import TrackState
 from core.transcriber import TranscriberThread, convert_raw_to_jianpu
 from ui.waveform_widget import WaveformWidget
-
-
-ALL_KEYS = [
-    '自動偵測',
-    'C', 'D', 'E', 'F', 'G', 'A', 'B',
-    'C#', 'Db', 'Eb', 'F#', 'Gb', 'Ab', 'Bb',
-    'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm',
-]
 
 
 class MidiView(QDialog):
@@ -112,19 +103,10 @@ class MidiView(QDialog):
 
         ctrl.addStretch()
 
-        # 調性 / 速度
-        ctrl.addWidget(QLabel("調性："))
-        self._key_combo = QComboBox()
-        self._key_combo.addItems(ALL_KEYS)
-        self._key_combo.setFixedWidth(110)
-        ctrl.addWidget(self._key_combo)
-
-        ctrl.addWidget(QLabel("速度："))
-        self._tempo_spin = QSpinBox()
-        self._tempo_spin.setRange(40, 240)
-        self._tempo_spin.setValue(120)
-        self._tempo_spin.setSuffix(" BPM")
-        ctrl.addWidget(self._tempo_spin)
+        # 調性 / 速度（唯讀顯示，由 Mixer 控制）
+        self._key_tempo_lbl = QLabel("—")
+        self._key_tempo_lbl.setObjectName("SmallLabel")
+        ctrl.addWidget(self._key_tempo_lbl)
 
         root.addLayout(ctrl)
 
@@ -133,11 +115,11 @@ class MidiView(QDialog):
     # ──────────────────────────────────────────────
 
     def _start_transcription(self):
-        # 若 result_view 已提供 BPM/調性，預先填入 UI
-        if self._initial_tempo > 0:
-            self._tempo_spin.setValue(int(self._initial_tempo))
-        if self._initial_key and self._initial_key not in ('', '自動偵測'):
-            self._key_combo.setCurrentText(self._initial_key)
+        # 預先顯示來自 Mixer 的值（最終值在 _on_done 更新）
+        if self._initial_tempo > 0 or self._initial_key:
+            key_display = self._initial_key or '偵測中'
+            tempo_display = int(self._initial_tempo) if self._initial_tempo > 0 else '—'
+            self._key_tempo_lbl.setText(f"{key_display}　{tempo_display} BPM")
 
         self._waveform.set_position(0.0)
         self._thread = TranscriberThread(
@@ -163,9 +145,7 @@ class MidiView(QDialog):
         self._progress_lbl.setVisible(False)
         self._progress_bar.setVisible(False)
 
-        self._tempo_spin.setValue(int(tempo))
-        if key in ALL_KEYS:
-            self._key_combo.setCurrentText(key)
+        self._key_tempo_lbl.setText(f"{key}　{int(tempo)} BPM")
 
         # 分析完成後才顯示波形
         self._waveform._load_audio(self.track.audio)
@@ -194,12 +174,10 @@ class MidiView(QDialog):
 
         # 合成音頻（快取）
         if self._synth_audio is None:
-            key = self._key_combo.currentText()
-            if key == '自動偵測':
-                key = self._auto_key
-            tempo = float(self._tempo_spin.value())
             from core.midi_synth import synthesize
-            self._synth_audio = synthesize(self._jianpu_notes, tempo, key)
+            self._synth_audio = synthesize(
+                self._jianpu_notes, self._auto_tempo, self._auto_key
+            )
 
         try:
             import sounddevice as sd
@@ -235,11 +213,7 @@ class MidiView(QDialog):
     # ──────────────────────────────────────────────
 
     def _current_key_tempo(self):
-        key = self._key_combo.currentText()
-        if key == '自動偵測':
-            key = self._auto_key
-        tempo = float(self._tempo_spin.value())
-        return key, tempo
+        return self._auto_key, self._auto_tempo
 
     def _open_staff(self):
         from ui.score_view import ScoreView
