@@ -230,7 +230,9 @@ class MidiView(QDialog):
     def _open_staff(self):
         from ui.score_view import ScoreView
         key, tempo = self._current_key_tempo()
-        dlg = ScoreView(self._jianpu_notes, tempo, key, self._file_title, parent=self)
+        beat_dur = 60.0 / tempo
+        notes = convert_raw_to_jianpu(self._raw_notes, key, beat_dur)
+        dlg = ScoreView(notes, tempo, key, self._file_title, parent=self)
         dlg.exec()
 
     def _open_jianpu(self):
