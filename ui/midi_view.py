@@ -25,11 +25,15 @@ ALL_KEYS = [
 
 
 class MidiView(QDialog):
-    def __init__(self, track: TrackState, label: str, parent=None, file_title: str = ''):
+    def __init__(self, track: TrackState, label: str, parent=None,
+                 file_title: str = '', initial_tempo: float = 0.0,
+                 initial_key: str = ''):
         super().__init__(parent)
         self.track = track
         self.label = label
         self._file_title = file_title or label
+        self._initial_tempo = initial_tempo     # 來自 result_view，0 表示未指定
+        self._initial_key = initial_key         # 來自 result_view，空表示未指定
         self.setWindowTitle(f"MIDI — {label}")
         self.resize(900, 480)
 
@@ -129,8 +133,18 @@ class MidiView(QDialog):
     # ──────────────────────────────────────────────
 
     def _start_transcription(self):
+        # 若 result_view 已提供 BPM/調性，預先填入 UI
+        if self._initial_tempo > 0:
+            self._tempo_spin.setValue(int(self._initial_tempo))
+        if self._initial_key and self._initial_key not in ('', '自動偵測'):
+            self._key_combo.setCurrentText(self._initial_key)
+
         self._waveform.set_position(0.0)
-        self._thread = TranscriberThread(self.track.audio, self.track.sample_rate, self)
+        self._thread = TranscriberThread(
+            self.track.audio, self.track.sample_rate, self,
+            initial_tempo=self._initial_tempo,
+            initial_key=self._initial_key,
+        )
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_done)
         self._thread.error.connect(self._on_error)

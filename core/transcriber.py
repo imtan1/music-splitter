@@ -57,10 +57,13 @@ class TranscriberThread(QThread):
     finished = Signal(list, list, float, str, float)
     error = Signal(str)
 
-    def __init__(self, audio: np.ndarray, sr: int, parent=None):
+    def __init__(self, audio: np.ndarray, sr: int, parent=None,
+                 initial_tempo: float = 0.0, initial_key: str = ''):
         super().__init__(parent)
         self.audio = audio
         self.sr = sr
+        self.initial_tempo = initial_tempo      # >0 則跳過 BPM 偵測
+        self.initial_key = initial_key          # 非空且非'自動偵測' 則跳過調性偵測
 
     def run(self):
         try:
@@ -88,9 +91,13 @@ class TranscriberThread(QThread):
             else:
                 sr = self.sr
 
-            # 用 RMS envelope 自相關法估 BPM（不用 STFT，速度快）
-            self.progress.emit("偵測節拍（BPM）...", 10)
-            tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
+            # BPM — 若外部已提供則直接使用，否則快速偵測
+            if self.initial_tempo > 0:
+                self.progress.emit("使用指定 BPM...", 10)
+                tempo = self.initial_tempo
+            else:
+                self.progress.emit("偵測節拍（BPM）...", 10)
+                tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
             beat_dur = 60.0 / tempo
 
             # parselmouth (Praat) 音高偵測，分 30 秒段處理讓進度條持續更新
@@ -157,8 +164,12 @@ class TranscriberThread(QThread):
             self.progress.emit("分割音符...", 65)
             raw = _segment_notes(f0, voiced, times, beat_dur)
 
-            self.progress.emit("偵測調性...", 75)
-            key = _detect_key(raw)
+            # 調性 — 若外部已指定則直接使用，否則自動偵測
+            if self.initial_key and self.initial_key not in ('', '自動偵測'):
+                key = self.initial_key
+            else:
+                self.progress.emit("偵測調性...", 75)
+                key = _detect_key(raw)
 
             self.progress.emit("節奏量化中（music21）...", 80)
             notes = _to_jianpu_music21(raw, key, beat_dur)

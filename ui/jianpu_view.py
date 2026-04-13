@@ -4,8 +4,8 @@ import tempfile
 import os
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QProgressBar, QComboBox, QSpinBox, QMessageBox,
+    QDialog, QVBoxLayout, QHBoxLayout,
+    QPushButton, QProgressBar, QLabel, QMessageBox,
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -14,40 +14,36 @@ from core.player import TrackState
 from core.transcriber import TranscriberThread, convert_raw_to_jianpu
 
 
-ALL_KEYS = [
-    '自動偵測',
-    'C', 'D', 'E', 'F', 'G', 'A', 'B',
-    'C#', 'Db', 'Eb', 'F#', 'Gb', 'Ab', 'Bb',
-    'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm',
-]
-
-
 class JianpuView(QDialog):
     def __init__(self, track: TrackState, label: str,
                  precomputed=None, parent=None, file_title=''):
         """
         precomputed: (raw_notes, jianpu_notes, tempo, key, beat_dur) 或 None。
-        傳入時跳過轉寫直接渲染，適合從 MidiView 呼叫以避免重複分析。
+        傳入時跳過轉寫直接渲染。
         """
         super().__init__(parent)
         self.track = track
         self.label = label
         self._file_title = file_title or label
         self.setWindowTitle(f"簡譜 — {self._file_title}")
-        self.resize(420, 220)
+        self.resize(380, 160)
 
         self._raw_notes = None
-        self._beat_dur = None
-        self._auto_key = 'C'
-        self._auto_tempo = 120.0
+        self._tempo = 120.0
+        self._key = 'C'
+        self._beat_dur = 0.5
         self._thread = None
         self._tmp_html = None
 
         self._build_ui()
 
         if precomputed is not None:
-            raw_notes, jianpu_notes, tempo, key, beat_dur = precomputed
-            self._on_done(raw_notes, jianpu_notes, tempo, key, beat_dur)
+            raw_notes, _, tempo, key, beat_dur = precomputed
+            self._raw_notes = raw_notes
+            self._tempo = tempo
+            self._key = key
+            self._beat_dur = beat_dur
+            self._render_and_open()
         else:
             self._start_transcription()
 
@@ -60,36 +56,6 @@ class JianpuView(QDialog):
         root.setSpacing(8)
         root.setContentsMargins(12, 12, 12, 12)
 
-        # ── 控制列 ──
-        ctrl = QHBoxLayout()
-
-        ctrl.addWidget(QLabel("調性："))
-        self._key_combo = QComboBox()
-        self._key_combo.addItems(ALL_KEYS)
-        self._key_combo.setFixedWidth(110)
-        ctrl.addWidget(self._key_combo)
-
-        ctrl.addWidget(QLabel("速度："))
-        self._tempo_spin = QSpinBox()
-        self._tempo_spin.setRange(40, 240)
-        self._tempo_spin.setValue(120)
-        self._tempo_spin.setSuffix(" BPM")
-        ctrl.addWidget(self._tempo_spin)
-
-        self._render_btn = QPushButton("重新生成")
-        self._render_btn.setEnabled(False)
-        self._render_btn.clicked.connect(self._rerender)
-        ctrl.addWidget(self._render_btn)
-
-        ctrl.addStretch()
-
-        self._open_btn = QPushButton("在瀏覽器開啟")
-        self._open_btn.setEnabled(False)
-        self._open_btn.clicked.connect(self._open_browser)
-        ctrl.addWidget(self._open_btn)
-
-        root.addLayout(ctrl)
-
         # ── 進度 ──
         self._progress_lbl = QLabel("準備分析...")
         root.addWidget(self._progress_lbl)
@@ -98,13 +64,26 @@ class JianpuView(QDialog):
         self._progress_bar.setRange(0, 100)
         root.addWidget(self._progress_bar)
 
+        # ── 按鈕列 ──
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        self._open_btn = QPushButton("在瀏覽器開啟")
+        self._open_btn.setEnabled(False)
+        self._open_btn.setFixedWidth(130)
+        self._open_btn.clicked.connect(self._open_browser)
+        btn_row.addWidget(self._open_btn)
+
+        btn_row.addStretch()
+        root.addLayout(btn_row)
+
         self._status_lbl = QLabel("")
         self._status_lbl.setAlignment(Qt.AlignCenter)
         self._status_lbl.setVisible(False)
         root.addWidget(self._status_lbl)
 
     # ──────────────────────────────────────────────
-    # 轉寫
+    # 轉寫（無 precomputed 時）
     # ──────────────────────────────────────────────
 
     def _start_transcription(self):
@@ -120,19 +99,12 @@ class JianpuView(QDialog):
 
     def _on_done(self, raw_notes, jianpu_notes, tempo, key, beat_dur):
         self._raw_notes = raw_notes
-        self._beat_dur  = beat_dur
-        self._auto_key  = key
-        self._auto_tempo = tempo
+        self._tempo = tempo
+        self._key = key
+        self._beat_dur = beat_dur
 
         self._progress_bar.setVisible(False)
         self._progress_lbl.setVisible(False)
-
-        self._tempo_spin.setValue(int(tempo))
-        if key in ALL_KEYS:
-            self._key_combo.setCurrentText(key)
-
-        self._render_btn.setEnabled(True)
-        self._open_btn.setEnabled(True)
         self._render_and_open()
 
     def _on_error(self, msg: str):
@@ -144,28 +116,16 @@ class JianpuView(QDialog):
     # 渲染 → HTML → 瀏覽器
     # ──────────────────────────────────────────────
 
-    def _rerender(self):
-        if self._raw_notes is None:
-            return
-        self._render_and_open()
-
     def _render_and_open(self):
         from core.jianpu_renderer import render_jianpu
         import matplotlib.pyplot as plt
 
-        key = self._key_combo.currentText()
-        if key == '自動偵測':
-            key = self._auto_key
+        notes = convert_raw_to_jianpu(self._raw_notes, self._key, self._beat_dur)
 
-        tempo = float(self._tempo_spin.value())
-        beat_dur = 60.0 / tempo
-
-        notes = convert_raw_to_jianpu(self._raw_notes, key, beat_dur)
-
-        self._render_btn.setEnabled(False)
-        self._render_btn.setText("生成中...")
+        self._progress_bar.setVisible(False)
+        self._progress_lbl.setVisible(False)
         try:
-            fig = render_jianpu(notes, tempo=tempo, key_name=key,
+            fig = render_jianpu(notes, tempo=self._tempo, key_name=self._key,
                                 title=self._file_title)
 
             buf = io.BytesIO()
@@ -187,7 +147,6 @@ class JianpuView(QDialog):
                 '</body></html>'
             )
 
-            # 清除上一個暫存檔
             if self._tmp_html and os.path.exists(self._tmp_html):
                 try:
                     os.remove(self._tmp_html)
@@ -200,6 +159,7 @@ class JianpuView(QDialog):
                 self._tmp_html = f.name
                 f.write(html)
 
+            self._open_btn.setEnabled(True)
             self._open_browser()
 
             self._status_lbl.setText("已在瀏覽器開啟")
@@ -207,9 +167,6 @@ class JianpuView(QDialog):
 
         except Exception as e:
             QMessageBox.critical(self, "渲染失敗", str(e))
-        finally:
-            self._render_btn.setEnabled(True)
-            self._render_btn.setText("重新生成")
 
     def _open_browser(self):
         if self._tmp_html and os.path.exists(self._tmp_html):

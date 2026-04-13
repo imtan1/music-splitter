@@ -17,11 +17,14 @@ class TrackChannel(QWidget):
     solo_changed = Signal(str, bool)
     volume_changed = Signal(str, float)
 
-    def __init__(self, track: TrackState, label: str, parent=None, file_title: str = ''):
+    def __init__(self, track: TrackState, label: str, parent=None,
+                 file_title: str = '', get_tempo=None, get_key=None):
         super().__init__(parent)
         self.track = track
         self.label = label
         self._file_title = file_title
+        self._get_tempo = get_tempo or (lambda: 120.0)
+        self._get_key = get_key or (lambda: '自動偵測')
         self._solo_player = SingleTrackPlayer(self)
         self._solo_player.load(track)
         self._solo_player.playback_stopped.connect(self._on_solo_stopped)
@@ -167,7 +170,9 @@ class TrackChannel(QWidget):
     def _on_midi(self):
         from ui.midi_view import MidiView
         dlg = MidiView(self.track, self.label, parent=self,
-                       file_title=self._file_title)
+                       file_title=self._file_title,
+                       initial_tempo=self._get_tempo(),
+                       initial_key=self._get_key())
         dlg.exec()
 
     def _on_download(self):

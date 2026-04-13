@@ -17,9 +17,55 @@ STEM_LABELS = {
 }
 
 
+def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
+    """
+    從原始音頻快速偵測 BPM 與調性。
+    wav_np: shape (channels, samples)，float32
+    回傳 (tempo_bpm, key_name)
+    """
+    from core.transcriber import _estimate_tempo_fast, NOTE_NAMES
+
+    mono = wav_np.mean(axis=0).astype(np.float32)
+
+    # BPM — 快速自相關法（取前 10 秒）
+    tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
+
+    # 調性 — chroma + Krumhansl-Schmuckler
+    try:
+        import librosa
+        segment = mono[:sr * 30]
+        chroma = librosa.feature.chroma_stft(
+            y=segment, sr=sr, hop_length=2048, n_fft=4096
+        )
+        chroma_mean = chroma.mean(axis=1)
+        total = chroma_mean.sum()
+        if total > 1e-8:
+            chroma_mean /= total
+
+        major_p = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
+                             2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+        minor_p = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
+                             2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+        major_p /= major_p.sum()
+        minor_p /= minor_p.sum()
+
+        best_score, key = -1.0, 'C'
+        for root in range(12):
+            shifted = np.roll(chroma_mean, -root)
+            for profile, suffix in [(major_p, ''), (minor_p, 'm')]:
+                score = float(np.dot(shifted, profile))
+                if score > best_score:
+                    best_score = score
+                    key = NOTE_NAMES[root] + suffix
+    except Exception:
+        key = 'C'
+
+    return tempo, key
+
+
 class SeparatorThread(QThread):
-    progress = Signal(str, int)   # (message, percent)
-    finished = Signal(dict)       # {stem: (audio_np float32, sample_rate)}
+    progress = Signal(str, int)         # (message, percent)
+    finished = Signal(dict, float, str) # {stem: (audio_np, sr)}, tempo, key
     error = Signal(str)
 
     def __init__(self, input_path: str, stems: list[str], parent=None):
@@ -45,7 +91,12 @@ class SeparatorThread(QThread):
                 samplerate=model.samplerate,
                 channels=model.audio_channels,
             )
-            # wav shape: (channels, samples)
+            # wav shape: (channels, samples) — torch tensor on CPU
+
+            # 在分源前偵測 BPM 與調性
+            self.progress.emit("偵測 BPM 與調性...", 18)
+            tempo, key = _detect_tempo_key(wav.numpy(), model.samplerate)
+
             ref = wav.mean(0)
             wav = (wav - ref.mean()) / ref.std()
             wav = wav.unsqueeze(0).to(device)  # (1, C, T)
@@ -79,7 +130,7 @@ class SeparatorThread(QThread):
                 result[stem_name] = (audio, sr)
 
             self.progress.emit("完成！", 100)
-            self.finished.emit(result)
+            self.finished.emit(result, tempo, key)
 
         except Exception as e:
             self.error.emit(str(e))

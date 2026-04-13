@@ -2,7 +2,7 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QScrollArea, QFileDialog,
-    QSizePolicy, QMessageBox,
+    QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -11,6 +11,13 @@ from core.mixer import mix_tracks
 from core.exporter import export_mp3
 from core.separator import STEM_LABELS
 from ui.track_channel import TrackChannel
+
+ALL_KEYS = [
+    '自動偵測',
+    'C', 'D', 'E', 'F', 'G', 'A', 'B',
+    'C#', 'Db', 'Eb', 'F#', 'Gb', 'Ab', 'Bb',
+    'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm',
+]
 
 
 class ResultView(QWidget):
@@ -32,9 +39,17 @@ class ResultView(QWidget):
     # 公開 API
     # ------------------------------------------------------------------
 
-    def load_results(self, results: dict, source_name: str = ""):
+    def get_tempo(self) -> float:
+        return float(self._tempo_spin.value())
+
+    def get_key(self) -> str:
+        return self._key_combo.currentText()
+
+    def load_results(self, results: dict, source_name: str = "",
+                     tempo: float = 120.0, key: str = 'C'):
         """
         results: {stem_name: (audio_np, sample_rate)}
+        tempo/key: 分源前偵測到的 BPM 與調性
         """
         self._engine.stop()
         self._channels.clear()
@@ -46,6 +61,11 @@ class ResultView(QWidget):
             if w:
                 w.deleteLater()
 
+        # 更新 BPM / 調性控制
+        self._tempo_spin.setValue(max(40, min(240, int(tempo))))
+        display_key = key if key in ALL_KEYS else '自動偵測'
+        self._key_combo.setCurrentText(display_key)
+
         tracks = []
         file_title = os.path.splitext(source_name)[0] if source_name else ''
 
@@ -54,7 +74,8 @@ class ResultView(QWidget):
             track = TrackState(stem_name, audio, sr)
             tracks.append(track)
 
-            ch = TrackChannel(track, label, self, file_title=file_title)
+            ch = TrackChannel(track, label, self, file_title=file_title,
+                              get_tempo=self.get_tempo, get_key=self.get_key)
             ch.mute_changed.connect(self._on_mute_changed)
             ch.solo_changed.connect(self._on_solo_changed)
             # 插在 stretch 之前
@@ -123,6 +144,30 @@ class ResultView(QWidget):
         self._seek_bar.sliderPressed.connect(self._on_seek_pressed)
         self._seek_bar.sliderReleased.connect(self._on_seek_released)
         master_layout.addWidget(self._seek_bar)
+
+        # BPM / 調性列
+        info_row = QHBoxLayout()
+
+        info_row.addWidget(QLabel("速度："))
+        self._tempo_spin = QSpinBox()
+        self._tempo_spin.setRange(40, 240)
+        self._tempo_spin.setValue(120)
+        self._tempo_spin.setSuffix(" BPM")
+        self._tempo_spin.setFixedWidth(100)
+        self._tempo_spin.setToolTip("調整後開啟 MIDI 分析將套用此速度")
+        info_row.addWidget(self._tempo_spin)
+
+        info_row.addSpacing(20)
+
+        info_row.addWidget(QLabel("調性："))
+        self._key_combo = QComboBox()
+        self._key_combo.addItems(ALL_KEYS)
+        self._key_combo.setFixedWidth(110)
+        self._key_combo.setToolTip("調整後開啟 MIDI 分析將套用此調性")
+        info_row.addWidget(self._key_combo)
+
+        info_row.addStretch()
+        master_layout.addLayout(info_row)
 
         # 整體音量 + 下載
         vol_dl_row = QHBoxLayout()

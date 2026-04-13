@@ -186,12 +186,13 @@ class MainWindow(QMainWindow):
         if self._progress_dialog:
             self._progress_dialog.update_progress(message, percent)
 
-    def _on_finished(self, results: dict):
+    def _on_finished(self, results: dict, tempo: float, key: str):
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
 
-        self._result_view.load_results(results, self._source_name)
+        self._result_view.load_results(results, self._source_name,
+                                       tempo=tempo, key=key)
         self._stack.setCurrentWidget(self._result_view)
 
     def _on_error(self, message: str):
