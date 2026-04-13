@@ -1,10 +1,22 @@
 import sys
 import os
+import threading
 
-# 禁止 numba 初始化 CUDA，避免有 GPU 的機器首次 import librosa 時
-# 花費 2-10 分鐘編譯 CUDA kernel 而造成程式凍結。
-# demucs 使用 PyTorch CUDA，不受此設定影響。
+# GPU 機器上 numba 首次 import 時會 JIT 編譯大量 kernel，造成程式凍結數分鐘。
+# 停用 numba CUDA，並在背景預熱 librosa，讓使用者使用 MIDI 功能時不再等待。
 os.environ.setdefault('NUMBA_DISABLE_CUDA', '1')
+os.environ.setdefault('NUMBA_DISABLE_JIT', '0')  # 保留 CPU JIT 但提早觸發
+
+
+def _prewarm_librosa():
+    """背景預熱 librosa/numba，避免首次按 MIDI 時凍結。"""
+    try:
+        import librosa  # noqa: F401
+    except Exception:
+        pass
+
+
+threading.Thread(target=_prewarm_librosa, daemon=True).start()
 
 # 確保專案根目錄在 import 路徑內
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

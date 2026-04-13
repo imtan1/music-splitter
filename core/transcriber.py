@@ -67,12 +67,6 @@ class TranscriberThread(QThread):
 
     def run(self):
         try:
-            import librosa
-        except ImportError:
-            self.error.emit("請先安裝 librosa：\npip install librosa")
-            return
-
-        try:
             mono = self.audio.mean(axis=1) if self.audio.ndim == 2 else self.audio
 
             # 降採樣到 22050 Hz，減少分析計算量
@@ -100,13 +94,16 @@ class TranscriberThread(QThread):
                 tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
             beat_dur = 60.0 / tempo
 
-            # parselmouth (Praat) 音高偵測，分 30 秒段處理讓進度條持續更新
+            # parselmouth (Praat) 音高偵測，分 10 秒段處理讓進度條持續更新
             HOP = 512
             CHUNK_SEC = 10
+            # 固定常數，不 import librosa 避免觸發 numba JIT 編譯
+            FMIN = 65.406   # C2
+            FMAX = 2093.005  # C7
             try:
                 import parselmouth
-                fmin = librosa.note_to_hz('C2')
-                fmax = librosa.note_to_hz('C7')
+                fmin = FMIN
+                fmax = FMAX
                 chunk_samples = sr * CHUNK_SEC
                 total_samples = len(mono)
                 n_chunks = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
@@ -136,9 +133,9 @@ class TranscriberThread(QThread):
                 times = np.concatenate(times_parts)
                 voiced = f0 > 0
             except ImportError:
-                # fallback: librosa pyin 分段處理
-                CHUNK_SEC = 30
-                chunk_size = sr * CHUNK_SEC
+                # fallback: librosa pyin 分段處理（parselmouth 未安裝時使用）
+                import librosa
+                chunk_size = sr * 30
                 total_samples = len(mono)
                 n_chunks = max(1, (total_samples + chunk_size - 1) // chunk_size)
                 f0_parts, voiced_parts = [], []
@@ -149,17 +146,14 @@ class TranscriberThread(QThread):
                     end = min(start + chunk_size, total_samples)
                     chunk = mono[start:end]
                     f0_c, v_c, _ = librosa.pyin(
-                        chunk,
-                        fmin=librosa.note_to_hz('C2'),
-                        fmax=librosa.note_to_hz('C7'),
-                        sr=sr,
-                        hop_length=HOP,
+                        chunk, fmin=FMIN, fmax=FMAX, sr=sr, hop_length=HOP,
                     )
                     f0_parts.append(f0_c)
                     voiced_parts.append(v_c)
                 f0 = np.concatenate(f0_parts)
                 voiced = np.concatenate(voiced_parts)
-                times = librosa.times_like(f0, sr=sr, hop_length=HOP)
+                n_frames = len(f0)
+                times = (np.arange(n_frames) * HOP / sr).astype(np.float32)
 
             self.progress.emit("分割音符...", 65)
             raw = _segment_notes(f0, voiced, times, beat_dur)
