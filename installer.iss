@@ -8,6 +8,9 @@
 #define AppVersion   "1.1.0"
 #define AppPublisher "MyStudio"
 #define AppExeName   "MusicSplitter.exe"
+#ifndef VersionSuffix
+  #define VersionSuffix "CPU"
+#endif
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
@@ -20,7 +23,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=
 OutputDir=dist\installer
-OutputBaseFilename=音樂分源程式_安裝檔_v{#AppVersion}
+OutputBaseFilename=音樂分源程式_安裝檔_v{#AppVersion}_{#VersionSuffix}
 SetupIconFile=
 Compression=lzma2/ultra64
 SolidCompression=yes
