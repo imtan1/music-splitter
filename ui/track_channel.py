@@ -122,13 +122,6 @@ class TrackChannel(QWidget):
     def set_solo_active(self, active: bool):
         self.waveform.set_muted(active and not self.solo_btn.isChecked())
 
-    def force_unsolo(self):
-        self.solo_btn.blockSignals(True)
-        self.solo_btn.setChecked(False)
-        self.solo_btn.blockSignals(False)
-        self.track.solo = False
-        self.waveform.set_muted(self.mute_btn.isChecked())
-
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
