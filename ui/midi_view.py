@@ -8,7 +8,7 @@ import time
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QProgressBar, QMessageBox, QWidget,
+    QPushButton, QProgressBar, QMessageBox, QWidget, QSlider,
 )
 from PySide6.QtCore import QTimer, Qt
 
@@ -48,6 +48,7 @@ class MidiView(QDialog):
         self._seek_ratio = 0.0
         self._play_start_ratio = 0.0
         self._play_start_time = 0.0
+        self._volume = 1.0
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(50)
@@ -153,6 +154,21 @@ class MidiView(QDialog):
         ctrl.addWidget(self._jianpu_btn)
 
         ctrl.addStretch()
+
+        ctrl.addWidget(QLabel("音量："))
+
+        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider.setRange(0, 150)
+        self._vol_slider.setValue(100)
+        self._vol_slider.setFixedWidth(120)
+        self._vol_slider.setToolTip("MIDI 播放音量 0–150%")
+        self._vol_slider.valueChanged.connect(self._on_volume_changed)
+        ctrl.addWidget(self._vol_slider)
+
+        self._vol_lbl = QLabel("100%")
+        self._vol_lbl.setFixedWidth(36)
+        ctrl.addWidget(self._vol_lbl)
+
         root.addLayout(ctrl)
 
     # ──────────────────────────────────────────────
@@ -216,6 +232,10 @@ class MidiView(QDialog):
     # MIDI 播放
     # ──────────────────────────────────────────────
 
+    def _on_volume_changed(self, value: int):
+        self._volume = value / 100.0
+        self._vol_lbl.setText(f"{value}%")
+
     def _on_waveform_seek(self, ratio: float):
         self._seek_ratio = ratio
         self._waveform.set_position(ratio)
@@ -247,7 +267,8 @@ class MidiView(QDialog):
         start_sample = int(max(0.0, min(1.0, ratio)) * total)
         try:
             sd.stop()
-            sd.play(self._synth_audio[start_sample:], samplerate=44100, latency='low')
+            audio_slice = self._synth_audio[start_sample:] * self._volume
+            sd.play(audio_slice, samplerate=44100, latency='low')
         except Exception as e:
             QMessageBox.warning(self, "播放失敗", str(e))
             return
