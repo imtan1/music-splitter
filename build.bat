@@ -1,28 +1,27 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
 echo ============================================================
-echo   音樂分源程式  Windows 建置腳本
+echo   MusicSplitter - Windows Build Script
 echo ============================================================
 echo.
 
 :: ──────────────────────────────────────────────
 :: 選擇建置版本
 :: ──────────────────────────────────────────────
-echo 請選擇打包版本：
-echo   [1] CPU 版（約 700 MB，所有電腦適用，分源速度較慢）
-echo   [2] GPU 版（約 1.6 GB，需 NVIDIA GPU，分源速度快 10-20 倍）
+echo 請選擇打包版本 / Select build type:
+echo   [1] CPU  ~700 MB   (適用所有電腦 / All PCs)
+echo   [2] GPU  ~1.6 GB   (需 NVIDIA GPU / Requires NVIDIA GPU)
 echo.
-set /p BUILD_TYPE="請輸入 1 或 2："
+set /p BUILD_TYPE="請輸入 1 或 2 / Enter 1 or 2: "
 
 if "%BUILD_TYPE%"=="1" (
     set "VERSION_SUFFIX=CPU"
-    set "BUILD_LABEL=CPU 版"
+    set "BUILD_LABEL=CPU"
     set "TORCH_INDEX=https://download.pytorch.org/whl/cpu"
 ) else if "%BUILD_TYPE%"=="2" (
     set "VERSION_SUFFIX=GPU"
-    set "BUILD_LABEL=GPU ^(CUDA^) 版"
+    set "BUILD_LABEL=GPU (CUDA)"
     set "TORCH_INDEX=https://download.pytorch.org/whl/cu121"
 ) else (
     echo [錯誤] 無效的選擇，請輸入 1 或 2
