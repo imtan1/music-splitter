@@ -1,27 +1,28 @@
 /* ============================================================
-   Music Splitter — Modern Dark Theme
+   Music Splitter — Clean Light Theme
    ============================================================ */
 
 /* ── 全域 ── */
 QWidget {
-    background-color: #0a0a18;
-    color: #e0e0ff;
+    background-color: #f0f4f8;
+    color: #1e293b;
     font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
     font-size: 13px;
 }
 
 QMainWindow, QStackedWidget {
-    background-color: #0a0a18;
+    background-color: #f0f4f8;
 }
 
 /* ── 群組框 ── */
 QGroupBox {
-    border: 1px solid #252550;
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
     border-radius: 10px;
     margin-top: 14px;
     padding: 10px 12px 10px 12px;
     font-size: 12px;
-    color: #8080bb;
+    color: #64748b;
 }
 
 QGroupBox::title {
@@ -29,138 +30,163 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 12px;
     padding: 0 6px;
-    color: #8080bb;
-    background-color: #0a0a18;
+    color: #64748b;
+    background-color: #ffffff;
 }
 
 /* ── CheckBox ── */
 QCheckBox {
     spacing: 7px;
-    color: #c0c0e8;
+    color: #1e293b;
     font-size: 13px;
 }
 
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
-    border: 2px solid #353570;
+    border: 2px solid #cbd5e1;
     border-radius: 5px;
-    background-color: #12122a;
+    background-color: #ffffff;
 }
 
 QCheckBox::indicator:hover {
-    border-color: #7B61FF;
-    background-color: #1a1a40;
+    border-color: #6366f1;
+    background-color: #eef2ff;
 }
 
 QCheckBox::indicator:checked {
-    background-color: #7B61FF;
-    border-color: #9d84ff;
-    image: url(assets/icons/check.svg);
+    background-color: #6366f1;
+    border-color: #6366f1;
 }
 
 /* ============================================================
-   按鈕 — 基礎
+   AI Badge / Track Chips
+   ============================================================ */
+QLabel#AiBadge {
+    background-color: #6366f1;
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+QLabel#TrackChip {
+    background-color: #eef2ff;
+    color: #6366f1;
+    border-radius: 10px;
+    border: 1px solid #c7d2fe;
+    padding: 2px 10px;
+    font-size: 11px;
+}
+
+/* ============================================================
+   按鈕 — 基礎（outline 淡灰）
    ============================================================ */
 QPushButton {
-    background-color: #1e1e3a;
-    color: #c8c8ee;
-    border: 1px solid #303060;
+    background-color: #ffffff;
+    color: #475569;
+    border: 1px solid #e2e8f0;
     border-radius: 8px;
     padding: 6px 14px;
     font-size: 12px;
 }
 
 QPushButton:hover {
-    background-color: #28285a;
-    border-color: #5050a0;
-    color: #ffffff;
+    background-color: #f1f5f9;
+    border-color: #cbd5e1;
+    color: #1e293b;
 }
 
 QPushButton:pressed {
-    background-color: #14142a;
-    border-color: #7B61FF;
+    background-color: #e2e8f0;
+    border-color: #94a3b8;
 }
 
 QPushButton:disabled {
-    background-color: #141428;
-    color: #404060;
-    border-color: #202040;
+    background-color: #f8fafc;
+    color: #cbd5e1;
+    border-color: #e2e8f0;
+}
+
+/* ── ▶ 獨立播放（outline Indigo） ── */
+QPushButton#PlayBtn {
+    background-color: #ffffff;
+    border: 1px solid #a5b4fc;
+    color: #6366f1;
+    border-radius: 18px;
+    font-size: 13px;
+    padding: 0;
+}
+
+QPushButton#PlayBtn:hover {
+    background-color: #eef2ff;
+    border-color: #6366f1;
+}
+
+QPushButton#PlayBtn:pressed {
+    background-color: #e0e7ff;
 }
 
 /* ── M（靜音） ── */
 QPushButton#MuteBtn {
-    background-color: #1e1e3a;
-    border-color: #303060;
-    color: #c0c0e0;
+    background-color: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    color: #334155;
     font-weight: bold;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: 6px;
+    padding: 0;
 }
 
-QPushButton#MuteBtn:hover  { background-color: #3a1a1a; border-color: #cc3333; }
+QPushButton#MuteBtn:hover  { background-color: #fee2e2; border-color: #fca5a5; color: #ef4444; }
 QPushButton#MuteBtn:checked {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #f44336, stop:1 #c62828);
-    border-color: #ef9a9a;
+    background-color: #ef4444;
+    border-color: #f87171;
     color: #ffffff;
 }
 
 /* ── S（獨奏） ── */
 QPushButton#SoloBtn {
-    background-color: #1e1e3a;
-    border-color: #303060;
-    color: #c0c0e0;
+    background-color: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    color: #334155;
     font-weight: bold;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: 6px;
+    padding: 0;
 }
 
-QPushButton#SoloBtn:hover  { background-color: #2a2010; border-color: #cc7700; }
+QPushButton#SoloBtn:hover  { background-color: #fef3c7; border-color: #fcd34d; color: #f59e0b; }
 QPushButton#SoloBtn:checked {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #ff9800, stop:1 #e65100);
-    border-color: #ffcc80;
+    background-color: #f59e0b;
+    border-color: #fbbf24;
     color: #ffffff;
 }
 
-/* ── 獨立播放 ── */
-QPushButton#PlayBtn {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #1565C0, stop:1 #0d47a1);
-    border-color: #42a5f5;
-    color: #ffffff;
-    border-radius: 6px;
-    font-size: 13px;
-}
-
-QPushButton#PlayBtn:hover {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #1976D2, stop:1 #1565C0);
-    border-color: #90caf9;
-}
-
-/* ── 下載單軌 ── */
+/* ── ⬇ 下載單軌（outline 天藍） ── */
 QPushButton#DownloadBtn {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #2e7d32, stop:1 #1b5e20);
-    border-color: #66bb6a;
-    color: #ffffff;
+    background-color: #ffffff;
+    border: 1px solid #7dd3fc;
+    color: #0284c7;
     font-size: 11px;
     border-radius: 6px;
 }
 
 QPushButton#DownloadBtn:hover {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #388e3c, stop:1 #2e7d32);
-    border-color: #a5d6a7;
+    background-color: #f0f9ff;
+    border-color: #0ea5e9;
+    color: #0369a1;
 }
 
-/* ── 整體播放 ── */
+QPushButton#DownloadBtn:pressed {
+    background-color: #e0f2fe;
+}
+
+/* ── 整體播放（filled Indigo） ── */
 QPushButton#MasterPlayBtn {
-    background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #7B61FF, stop:1 #5a40dd);
-    border: 1px solid #9d84ff;
+    background-color: #534AB7;
+    border: none;
     border-radius: 10px;
     color: #ffffff;
     font-size: 14px;
@@ -170,20 +196,22 @@ QPushButton#MasterPlayBtn {
 }
 
 QPushButton#MasterPlayBtn:hover {
-    background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #9d84ff, stop:1 #7B61FF);
-    border-color: #c4b5ff;
+    background-color: #4540a0;
 }
 
 QPushButton#MasterPlayBtn:pressed {
-    background-color: #5a40dd;
+    background-color: #353090;
 }
 
-/* ── 整體下載 ── */
+QPushButton#MasterPlayBtn:disabled {
+    background-color: #c5c3e8;
+    color: #ffffff;
+}
+
+/* ── 整體下載（filled 天藍） ── */
 QPushButton#MasterDownloadBtn {
-    background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #00897b, stop:1 #00695c);
-    border: 1px solid #4db6ac;
+    background-color: #0ea5e9;
+    border: 1px solid #38bdf8;
     border-radius: 10px;
     color: #ffffff;
     font-size: 13px;
@@ -192,25 +220,32 @@ QPushButton#MasterDownloadBtn {
 }
 
 QPushButton#MasterDownloadBtn:hover {
-    background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #26a69a, stop:1 #00897b);
-    border-color: #80cbc4;
+    background-color: #0284c7;
+    border-color: #0ea5e9;
 }
 
-/* ── 簡譜 ── */
+/* ── 簡譜/五線譜（outline 紫羅蘭） ── */
 QPushButton#JianpuBtn {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #6a1b9a, stop:1 #4a0072);
-    border-color: #ab47bc;
-    color: #ffffff;
-    border-radius: 6px;
-    font-size: 11px;
+    background-color: transparent;
+    border: 1px solid #AFA9EC;
+    color: #534AB7;
+    border-radius: 8px;
+    font-size: 12px;
+    padding: 7px 14px;
 }
 
 QPushButton#JianpuBtn:hover {
-    background-color: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #8e24aa, stop:1 #6a1b9a);
-    border-color: #ce93d8;
+    background-color: #EEEDFE;
+    border-color: #7F77DD;
+}
+
+QPushButton#JianpuBtn:pressed {
+    background-color: #dddcf8;
+}
+
+QPushButton#JianpuBtn:disabled {
+    border-color: #d0ceee;
+    color: #b0acd8;
 }
 
 /* ============================================================
@@ -218,24 +253,22 @@ QPushButton#JianpuBtn:hover {
    ============================================================ */
 QSlider::groove:horizontal {
     height: 4px;
-    background: #1e1e40;
+    background: #e2e8f0;
     border-radius: 2px;
-    border: 1px solid #2a2a55;
+    border: none;
 }
 
 QSlider::handle:horizontal {
     width: 14px;
     height: 14px;
     margin: -5px 0;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #9d84ff, stop:1 #7B61FF);
+    background: #6366f1;
     border-radius: 7px;
-    border: 1px solid #c4b5ff;
+    border: 2px solid #ffffff;
 }
 
 QSlider::handle:horizontal:hover {
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #b8a4ff, stop:1 #9d84ff);
+    background: #4f46e5;
     width: 16px;
     height: 16px;
     margin: -6px 0;
@@ -243,32 +276,29 @@ QSlider::handle:horizontal:hover {
 }
 
 QSlider::sub-page:horizontal {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #7B61FF, stop:1 #00d4ff);
+    background: #6366f1;
     border-radius: 2px;
 }
 
 /* Seek bar */
 QSlider#SeekBar::groove:horizontal {
     height: 5px;
-    background: #1e1e40;
+    background: #e2e8f0;
     border-radius: 3px;
-    border: 1px solid #2a2a55;
+    border: none;
 }
 
 QSlider#SeekBar::handle:horizontal {
     width: 15px;
     height: 15px;
     margin: -5px 0;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-        stop:0 #80dfff, stop:1 #00b4d8);
+    background: #6366f1;
     border-radius: 8px;
-    border: 1px solid #a0efff;
+    border: 2px solid #ffffff;
 }
 
 QSlider#SeekBar::sub-page:horizontal {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #00b4d8, stop:1 #7B61FF);
+    background: #6366f1;
     border-radius: 3px;
 }
 
@@ -276,18 +306,18 @@ QSlider#SeekBar::sub-page:horizontal {
    進度條
    ============================================================ */
 QProgressBar {
-    border: 1px solid #252550;
+    border: 1px solid #e2e8f0;
     border-radius: 6px;
-    background-color: #12122a;
+    background-color: #f1f5f9;
     text-align: center;
-    color: #c0c0f0;
+    color: #64748b;
     height: 20px;
     font-size: 11px;
 }
 
 QProgressBar::chunk {
     background-color: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-        stop:0 #7B61FF, stop:1 #00d4ff);
+        stop:0 #6366f1, stop:1 #0ea5e9);
     border-radius: 5px;
 }
 
@@ -295,25 +325,26 @@ QProgressBar::chunk {
    Track Channel
    ============================================================ */
 QWidget#TrackChannel {
-    background-color: #111128;
-    border: 1px solid #252550;
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
     border-radius: 10px;
 }
 
 QWidget#TrackChannel:hover {
-    border-color: #40407a;
+    border-color: #a5b4fc;
+    background-color: #f5f7ff;
 }
 
 QLabel#TrackName {
     font-size: 13px;
     font-weight: bold;
-    color: #a090ff;
+    color: #6366f1;
     letter-spacing: 0.5px;
 }
 
 QLabel#SmallLabel {
     font-size: 11px;
-    color: #6060a0;
+    color: #94a3b8;
 }
 
 /* ============================================================
@@ -321,36 +352,36 @@ QLabel#SmallLabel {
    ============================================================ */
 QScrollArea {
     border: none;
-    background-color: #0a0a18;
+    background-color: #f0f4f8;
 }
 
 QScrollBar:vertical {
     width: 7px;
-    background: #0d0d20;
+    background: #f1f5f9;
     border-radius: 4px;
 }
 
 QScrollBar::handle:vertical {
-    background: #303070;
+    background: #cbd5e1;
     border-radius: 4px;
     min-height: 30px;
 }
 
-QScrollBar::handle:vertical:hover { background: #5050a0; }
+QScrollBar::handle:vertical:hover { background: #94a3b8; }
 
 QScrollBar:horizontal {
     height: 7px;
-    background: #0d0d20;
+    background: #f1f5f9;
     border-radius: 4px;
 }
 
 QScrollBar::handle:horizontal {
-    background: #303070;
+    background: #cbd5e1;
     border-radius: 4px;
     min-width: 30px;
 }
 
-QScrollBar::handle:horizontal:hover { background: #5050a0; }
+QScrollBar::handle:horizontal:hover { background: #94a3b8; }
 
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
@@ -359,12 +390,12 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
    Drop Zone
    ============================================================ */
 QLabel#DropZone {
-    border: 2px dashed #303070;
+    border: 2px dashed #c7d2fe;
     border-radius: 16px;
-    color: #5050a0;
-    font-size: 15px;
+    color: #94a3b8;
+    font-size: 14px;
     padding: 40px;
-    background-color: #0d0d22;
+    background-color: #fafbff;
     line-height: 1.8;
 }
 
@@ -372,16 +403,16 @@ QLabel#DropZone {
    ComboBox / SpinBox
    ============================================================ */
 QComboBox, QSpinBox {
-    background-color: #16163a;
-    border: 1px solid #303060;
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
     border-radius: 6px;
     padding: 4px 10px;
-    color: #c8c8ee;
-    selection-background-color: #7B61FF;
+    color: #1e293b;
+    selection-background-color: #6366f1;
 }
 
 QComboBox:hover, QSpinBox:hover {
-    border-color: #5050a0;
+    border-color: #a5b4fc;
 }
 
 QComboBox::drop-down {
@@ -390,36 +421,38 @@ QComboBox::drop-down {
 }
 
 QComboBox QAbstractItemView {
-    background-color: #16163a;
-    border: 1px solid #303060;
-    selection-background-color: #7B61FF;
-    color: #c8c8ee;
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    selection-background-color: #6366f1;
+    selection-color: #ffffff;
+    color: #1e293b;
     outline: none;
 }
 
 QSpinBox::up-button, QSpinBox::down-button {
-    background-color: #252550;
+    background-color: #f1f5f9;
     border: none;
     width: 16px;
     border-radius: 3px;
 }
 
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-    background-color: #7B61FF;
+    background-color: #6366f1;
+    color: #ffffff;
 }
 
 /* ============================================================
    Dialog / MessageBox
    ============================================================ */
 QDialog {
-    background-color: #0e0e20;
+    background-color: #f0f4f8;
 }
 
 QMessageBox {
-    background-color: #0e0e20;
+    background-color: #f0f4f8;
 }
 
 QMessageBox QLabel {
-    color: #e0e0ff;
+    color: #1e293b;
     font-size: 13px;
 }

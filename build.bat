@@ -131,7 +131,7 @@ if exist "%INNO_PATH%" (
         echo.
         echo ============================================================
         echo   建置完成！
-        echo   安裝檔：dist\installer\音樂分源程式_安裝檔_v1.0.0.exe
+        echo   安裝檔：dist\installer\音樂分源程式_安裝檔_v1.1.0.exe
         echo ============================================================
         pause & exit /b 0
     )
@@ -140,7 +140,7 @@ if exist "%INNO_PATH%" (
 :: Inno Setup 不存在就改用 PowerShell 壓 ZIP
 echo     Inno Setup 未安裝，改為建立 ZIP 壓縮檔...
 if not exist "dist\release" mkdir "dist\release"
-powershell -Command "Compress-Archive -Path 'dist\MusicSplitter' -DestinationPath 'dist\release\音樂分源程式_v1.0.0.zip' -Force"
+powershell -Command "Compress-Archive -Path 'dist\MusicSplitter' -DestinationPath 'dist\release\音樂分源程式_v1.1.0.zip' -Force"
 
 if errorlevel 1 (
     echo [錯誤] ZIP 建立失敗
@@ -150,7 +150,7 @@ if errorlevel 1 (
 echo.
 echo ============================================================
 echo   建置完成！
-echo   ZIP 檔案：dist\release\音樂分源程式_v1.0.0.zip
+echo   ZIP 檔案：dist\release\音樂分源程式_v1.1.0.zip
 echo   使用方式：解壓後直接執行 MusicSplitter.exe
 echo ============================================================
 echo.

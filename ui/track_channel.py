@@ -13,10 +13,12 @@ from ui.waveform_widget import WaveformWidget
 class TrackChannel(QWidget):
     """單一音軌的橫向 row：[名稱] [波形] [▶] [M] [S] [音量] [⬇]"""
 
-    mute_changed = Signal(str, bool)
-    solo_changed = Signal(str, bool)
-    volume_changed = Signal(str, float)
-    seek_requested = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
+    mute_changed      = Signal(str, bool)
+    solo_changed      = Signal(str, bool)
+    volume_changed    = Signal(str, float)
+    seek_requested    = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
+    solo_play_started = Signal()        # 單軌播放開始，通知 ResultView 停掉其它來源
+    position_changed  = Signal(float)   # 單軌播放進度，0.0 ~ 1.0
 
     def __init__(self, track: TrackState, label: str, parent=None,
                  file_title: str = '', get_tempo=None, get_key=None):
@@ -29,15 +31,16 @@ class TrackChannel(QWidget):
         self._solo_player = SingleTrackPlayer(self)
         self._solo_player.load(track)
         self._solo_player.playback_stopped.connect(self._on_solo_stopped)
+        self._solo_player.position_changed.connect(self.position_changed)
         self._build_ui()
 
     def _build_ui(self):
-        self.setFixedHeight(90)
+        self.setFixedHeight(80)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setObjectName("TrackChannel")
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(10, 6, 10, 6)
+        row.setContentsMargins(12, 6, 12, 6)
         row.setSpacing(10)
 
         # 音軌名稱
@@ -65,7 +68,7 @@ class TrackChannel(QWidget):
         self.mute_btn = QPushButton("M")
         self.mute_btn.setObjectName("MuteBtn")
         self.mute_btn.setCheckable(True)
-        self.mute_btn.setFixedSize(32, 32)
+        self.mute_btn.setFixedSize(30, 30)
         self.mute_btn.setToolTip("靜音")
         self.mute_btn.toggled.connect(self._on_mute_toggled)
         row.addWidget(self.mute_btn)
@@ -73,37 +76,24 @@ class TrackChannel(QWidget):
         self.solo_btn = QPushButton("S")
         self.solo_btn.setObjectName("SoloBtn")
         self.solo_btn.setCheckable(True)
-        self.solo_btn.setFixedSize(32, 32)
+        self.solo_btn.setFixedSize(30, 30)
         self.solo_btn.setToolTip("獨奏")
         self.solo_btn.toggled.connect(self._on_solo_toggled)
         row.addWidget(self.solo_btn)
 
-        # 音量區（label + slider + 百分比）
-        vol_col = QVBoxLayout()
-        vol_col.setSpacing(2)
-        vol_col.setContentsMargins(0, 0, 0, 0)
-
-        vol_top = QHBoxLayout()
-        vol_top.setSpacing(4)
-        vol_lbl = QLabel("音量")
-        vol_lbl.setObjectName("SmallLabel")
-        self.vol_value_lbl = QLabel("100%")
-        self.vol_value_lbl.setObjectName("SmallLabel")
-        self.vol_value_lbl.setFixedWidth(36)
-        vol_top.addWidget(vol_lbl)
-        vol_top.addStretch()
-        vol_top.addWidget(self.vol_value_lbl)
-
+        # 音量滑桿
         self.vol_slider = QSlider(Qt.Horizontal)
         self.vol_slider.setRange(0, 150)
         self.vol_slider.setValue(100)
         self.vol_slider.setFixedWidth(120)
         self.vol_slider.setToolTip("音量 0–150%")
         self.vol_slider.valueChanged.connect(self._on_volume_changed)
+        row.addWidget(self.vol_slider)
 
-        vol_col.addLayout(vol_top)
-        vol_col.addWidget(self.vol_slider)
-        row.addLayout(vol_col)
+        self.vol_value_lbl = QLabel("100%")
+        self.vol_value_lbl.setObjectName("SmallLabel")
+        self.vol_value_lbl.setFixedWidth(36)
+        row.addWidget(self.vol_value_lbl)
 
         # 下載按鈕
         self.dl_btn = QPushButton("⬇ MP3")
@@ -143,11 +133,22 @@ class TrackChannel(QWidget):
     # Slots
     # ------------------------------------------------------------------
 
+    def stop_solo_play(self):
+        """外部呼叫：強制停止單軌播放並還原按鈕狀態。"""
+        if self._solo_player.is_playing():
+            self._solo_player.stop()
+            self.play_btn.setText("▶")
+
+    def seek_solo_player(self, ratio: float):
+        """外部呼叫：設定單軌播放起始位置（播放前呼叫）。"""
+        self._solo_player.seek(ratio)
+
     def _toggle_solo_play(self):
         if self._solo_player.is_playing():
             self._solo_player.stop()
             self.play_btn.setText("▶")
         else:
+            self.solo_play_started.emit()   # 先通知 ResultView 停掉其它播放
             self._solo_player.play()
             self.play_btn.setText("⏹")
 

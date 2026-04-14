@@ -97,6 +97,7 @@ class AudioEngine(QObject):
             dtype="float32",
             callback=self._callback,
             finished_callback=self._on_stream_finished,
+            latency='low',
         )
         self._stream.start()
         self._timer.start()
@@ -104,7 +105,7 @@ class AudioEngine(QObject):
     def pause(self):
         self._playing = False
         if self._stream:
-            self._stream.stop()
+            self._stream.abort()
             self._stream.close()
             self._stream = None
         self._timer.stop()
@@ -167,6 +168,7 @@ class AudioEngine(QObject):
 class SingleTrackPlayer(QObject):
     """獨立播放單一音軌（不走 M/S 邏輯）。"""
     playback_stopped = Signal()
+    position_changed = Signal(float)   # 0.0 ~ 1.0，每 50ms 發出
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -175,10 +177,23 @@ class SingleTrackPlayer(QObject):
         self._position = 0
         self._playing = False
 
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._emit_position)
+
     def load(self, track: TrackState):
         self.stop()
         self._track = track
         self._position = 0
+
+    def get_position_ratio(self) -> float:
+        if self._track is None or self._track.length == 0:
+            return 0.0
+        return self._position / self._track.length
+
+    def seek(self, ratio: float):
+        if self._track is not None:
+            self._position = int(max(0.0, min(1.0, ratio)) * self._track.length)
 
     def play(self):
         if self._playing or self._track is None:
@@ -193,19 +208,25 @@ class SingleTrackPlayer(QObject):
             dtype="float32",
             callback=self._callback,
             finished_callback=self._on_finished,
+            latency='low',
         )
         self._stream.start()
+        self._timer.start()
 
     def stop(self):
+        self._timer.stop()
         self._playing = False
         if self._stream:
-            self._stream.stop()
+            self._stream.abort()
             self._stream.close()
             self._stream = None
         self._position = 0
 
     def is_playing(self) -> bool:
         return self._playing
+
+    def _emit_position(self):
+        self.position_changed.emit(self.get_position_ratio())
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status):
         if self._track is None:
@@ -230,7 +251,9 @@ class SingleTrackPlayer(QObject):
             raise sd.CallbackStop()
 
     def _on_finished(self):
+        self._timer.stop()
         if self._stream:
             self._stream.close()
             self._stream = None
+        self.position_changed.emit(self.get_position_ratio())
         self.playback_stopped.emit()

@@ -45,7 +45,7 @@ class ScoreView(QDialog):
         self._status_lbl.setAlignment(Qt.AlignCenter)
         self._status_lbl.setWordWrap(True)
         self._status_lbl.setStyleSheet(
-            "color: #a090ff; font-size: 13px; padding: 4px;"
+            "color: #6366f1; font-size: 13px; padding: 4px;"
         )
         root.addWidget(self._status_lbl)
 
@@ -74,7 +74,7 @@ class ScoreView(QDialog):
     def _show_error(self, msg: str):
         self._status_lbl.setText(f"⚠  {msg}")
         self._status_lbl.setStyleSheet(
-            "color: #ff8080; font-size: 13px; padding: 4px;"
+            "color: #ef4444; font-size: 13px; padding: 4px;"
         )
         print(f"[ScoreView] 錯誤: {msg}", file=sys.stderr, flush=True)
 
@@ -119,7 +119,7 @@ class ScoreView(QDialog):
 
         self._status_lbl.setText("✅  五線譜生成完成，點擊下方按鈕在瀏覽器中檢視。")
         self._status_lbl.setStyleSheet(
-            "color: #80ff99; font-size: 13px; padding: 4px;"
+            "color: #059669; font-size: 13px; padding: 4px;"
         )
         self._open_btn.setEnabled(True)
         self._save_btn.setEnabled(True)

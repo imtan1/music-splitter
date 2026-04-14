@@ -183,6 +183,8 @@ class ResultView(QWidget):
             ch.mute_changed.connect(self._on_mute_changed)
             ch.solo_changed.connect(self._on_solo_changed)
             ch.seek_requested.connect(self._on_waveform_seek)
+            ch.solo_play_started.connect(self._on_solo_play_started)
+            ch.position_changed.connect(self._on_position_changed)
             # 插在 stretch 之前
             self._channels_layout.insertWidget(self._channels_layout.count() - 1, ch)
             self._channels.append(ch)
@@ -353,11 +355,35 @@ class ResultView(QWidget):
     # Slots
     # ------------------------------------------------------------------
 
+    def _stop_all_solo_players(self):
+        """停止所有音軌的獨立播放。"""
+        for ch in self._channels:
+            ch.stop_solo_play()
+
+    def _on_solo_play_started(self):
+        """單軌開始播放 → 停掉 master 及其它所有單軌，並讓新軌從目前進度開始。"""
+        current_ratio = self._seek_bar.value() / 1000.0
+
+        if self._engine.is_playing():
+            self._engine.pause()
+            self._play_btn.setText("▶ 整體播放")
+
+        # 停掉所有單軌（發出 signal 的那個尚未開始播，stop 對它無影響）
+        self._stop_all_solo_players()
+
+        # 讓即將播放的那軌從目前進度位置開始（signal 是同步的，play() 尚未執行）
+        sender_ch = self.sender()
+        if isinstance(sender_ch, TrackChannel):
+            sender_ch.seek_solo_player(current_ratio)
+
     def _toggle_master_play(self):
         if self._engine.is_playing():
             self._engine.pause()
             self._play_btn.setText("▶ 整體播放")
         else:
+            self._stop_all_solo_players()
+            # 從 seek bar 目前位置繼續（單軌播放過程中 engine 位置不會更新）
+            self._engine.seek(self._seek_bar.value() / 1000.0)
             self._engine.play()
             self._play_btn.setText("⏸ 暫停")
 

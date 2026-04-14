@@ -1,29 +1,30 @@
 import numpy as np
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QRect, Signal
-from PySide6.QtGui import QPainter, QColor, QPen, QCursor
+from PySide6.QtGui import QPainter, QColor, QPen
 
 
 class WaveformWidget(QWidget):
     """
-    繪製單一音軌的波形圖，並顯示播放進度（playhead）。
+    繪製單一音軌的波形圖（bar chart 風格），並顯示播放進度（playhead）。
     audio: float32 numpy array, shape (samples, channels)
-    點擊或拖曳波形圖可 seek 到對應位置。
     """
 
-    seek_requested = Signal(float)   # 0.0 ~ 1.0
+    seek_requested = Signal(float)   # 0.0 ~ 1.0，點擊波形觸發跳轉
 
-    WAVEFORM_COLOR = QColor("#7B61FF")
-    PLAYED_COLOR   = QColor("#00d4ff")
-    PLAYHEAD_COLOR = QColor("#ffffff")
-    BG_COLOR       = QColor("#0e0e20")
-    MUTED_COLOR    = QColor("#2a2a4a")
+    WAVEFORM_COLOR = QColor("#6366f1")
+    PLAYED_COLOR   = QColor("#0ea5e9")
+    PLAYHEAD_COLOR = QColor("#1e293b")
+    BG_COLOR       = QColor("#f8fafc")
+    MUTED_COLOR    = QColor("#cbd5e1")
+
+    BAR_W = 3   # 每根 bar 寬度（px）
+    BAR_G = 1   # bar 之間間距（px）
 
     def __init__(self, audio: np.ndarray, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(80)
         self.setMinimumWidth(120)
-        self.setCursor(QCursor(Qt.PointingHandCursor))
         self._peaks: np.ndarray = np.array([])
         self._position = 0.0   # 0.0 ~ 1.0
         self._muted = False
@@ -33,7 +34,6 @@ class WaveformWidget(QWidget):
         if audio is None or len(audio) == 0:
             self._peaks = np.zeros(1)
             return
-        # 取單聲道平均
         if audio.ndim == 2:
             mono = audio.mean(axis=1)
         else:
@@ -65,22 +65,14 @@ class WaveformWidget(QWidget):
         self._muted = muted
         self.update()
 
-    # ------------------------------------------------------------------
-    # Mouse events for seek scrubbing
-    # ------------------------------------------------------------------
-
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            ratio = max(0.0, min(1.0, event.position().x() / self.width()))
-            self._position = ratio
-            self.update()
+        if event.button() == Qt.LeftButton and self.width() > 0:
+            ratio = max(0.0, min(1.0, event.x() / self.width()))
             self.seek_requested.emit(ratio)
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
-            ratio = max(0.0, min(1.0, event.position().x() / self.width()))
-            self._position = ratio
-            self.update()
+        if event.buttons() & Qt.LeftButton and self.width() > 0:
+            ratio = max(0.0, min(1.0, event.x() / self.width()))
             self.seek_requested.emit(ratio)
 
     def paintEvent(self, event):
@@ -95,30 +87,27 @@ class WaveformWidget(QWidget):
         painter.fillRect(0, 0, w, h, self.BG_COLOR)
 
         if len(self._peaks) == 0:
+            painter.end()
             return
-
-        waveform_color = self.MUTED_COLOR if self._muted else self.WAVEFORM_COLOR
-        pen = QPen(waveform_color)
-        pen.setWidth(1)
-        painter.setPen(pen)
 
         n = len(self._peaks)
         playhead_x = int(self._position * w)
+        step = self.BAR_W + self.BAR_G
 
-        for px in range(w):
-            peak_idx = int(px / w * n)
-            peak_idx = min(peak_idx, n - 1)
+        for bar_x in range(0, w - self.BAR_W + 1, step):
+            center_x = bar_x + self.BAR_W // 2
+            peak_idx = min(int(center_x / w * n), n - 1)
             amp = self._peaks[peak_idx]
-            bar_h = int(amp * mid * 0.9)
+            bar_h = max(2, int(amp * mid * 0.88))
 
-            # 播放過的部分用 cyan，未播放用 purple
-            if px < playhead_x:
-                color = self.PLAYED_COLOR if not self._muted else self.MUTED_COLOR
-                painter.setPen(QPen(color))
+            if self._muted:
+                color = self.MUTED_COLOR
+            elif center_x < playhead_x:
+                color = self.PLAYED_COLOR
             else:
-                painter.setPen(QPen(waveform_color))
+                color = self.WAVEFORM_COLOR
 
-            painter.drawLine(px, mid - bar_h, px, mid + bar_h)
+            painter.fillRect(bar_x, mid - bar_h, self.BAR_W, bar_h * 2, color)
 
         # Playhead
         if 0.0 < self._position <= 1.0:

@@ -2,14 +2,102 @@ import os
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QStackedWidget,
-    QMessageBox, QFrame,
+    QMessageBox, QFrame, QSizePolicy,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtCore import Qt, QRectF, QSize, QByteArray
+from PySide6.QtGui import (
+    QDragEnterEvent, QDropEvent, QFont,
+    QPainter, QLinearGradient, QColor, QPainterPath,
+    QFontMetricsF,
+)
+from PySide6.QtSvg import QSvgRenderer
 
 from core.separator import SeparatorThread, STEMS, STEM_LABELS
 from ui.progress_dialog import ProgressDialog
 from ui.result_view import ResultView
+
+
+_MUSIC_SVG = b"""<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M9 18V5l12-2v13" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="6" cy="18" r="3" stroke="white" stroke-width="1.8" fill="none"/>
+  <circle cx="18" cy="16" r="3" stroke="white" stroke-width="1.8" fill="none"/>
+</svg>"""
+
+
+class GradientIconWidget(QWidget):
+    """48×48 圓角漸層背景 + 白色音符 SVG icon"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(48, 48)
+        self._renderer = QSvgRenderer(QByteArray(_MUSIC_SVG), self)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # 漸層圓角背景（左上 → 右下）
+        grad = QLinearGradient(0, 0, 48, 48)
+        grad.setColorAt(0.0, QColor("#534AB7"))
+        grad.setColorAt(1.0, QColor("#44aaff"))
+
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, 48, 48), 14, 14)
+        painter.fillPath(path, grad)
+
+        # SVG icon 居中（24×24 置於 12,12）
+        self._renderer.render(painter, QRectF(12, 12, 24, 24))
+        painter.end()
+
+
+class GradientLabel(QWidget):
+    """漸層文字 Widget：#534AB7 → #7F77DD → #44aaff，34px bold"""
+
+    _FONT_SIZE = 44
+    _COLORS    = [
+        (0.0, QColor("#534AB7")),
+        (0.5, QColor("#7F77DD")),
+        (1.0, QColor("#44aaff")),
+    ]
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self._text = text
+        self._font = QFont()
+        self._font.setFamilies(["Segoe UI", "Microsoft JhengHei"])
+        self._font.setPixelSize(self._FONT_SIZE)
+        self._font.setBold(True)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetricsF(self._font)
+        w = int(fm.horizontalAdvance(self._text)) + 8
+        h = int(fm.height()) + 4
+        return QSize(w, h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        grad = QLinearGradient(0, 0, w, 0)
+        for stop, color in self._COLORS:
+            grad.setColorAt(stop, color)
+
+        fm = QFontMetricsF(self._font)
+        path = QPainterPath()
+        path.addText(0, fm.ascent(), self._font, self._text)
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(grad)
+        painter.drawPath(path)
+        painter.end()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 
 class DropZoneLabel(QLabel):
@@ -18,20 +106,47 @@ class DropZoneLabel(QLabel):
         super().__init__(parent)
         self.setObjectName("DropZone")
         self.setAlignment(Qt.AlignCenter)
-        self.setText("🎵  拖曳音樂檔案至此\n\n或點擊選擇檔案\n\nMP3 · WAV · FLAC · M4A")
+        self._set_idle_text()
         self.setAcceptDrops(True)
         self.setMinimumHeight(180)
+        self._is_selected = False
+
+    def _set_idle_text(self):
+        self.setTextFormat(Qt.PlainText)
+        self.setText("🎵  拖曳音樂檔案至此\n\n或點擊選擇檔案\n\nMP3 · WAV · FLAC · M4A")
+
+    def set_selected(self, name: str):
+        self._is_selected = True
+        self.setTextFormat(Qt.RichText)
+        self.setText(
+            '🎵<br><br>'
+            f'<span style="color:#6366f1; font-size:13px; font-weight:600;">'
+            f'♪&nbsp;&nbsp;{name}</span><br><br>'
+            '<span style="font-size:12px;">點擊重新選擇</span>'
+        )
+        self.setStyleSheet("border-color: #6366f1; color: #1e293b;")
+
+    def set_idle(self):
+        self._is_selected = False
+        self.setStyleSheet("")
+        self._set_idle_text()
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self.setStyleSheet("border-color: #4CAF50; color: #4CAF50;")
+            self.setStyleSheet("border-color: #6366f1; color: #6366f1;")
 
     def dragLeaveEvent(self, event):
-        self.setStyleSheet("")
+        if self._is_selected:
+            self.setStyleSheet("border-color: #6366f1; color: #1e293b;")
+        else:
+            self.setStyleSheet("")
 
     def dropEvent(self, event: QDropEvent):
-        self.setStyleSheet("")
+        if self._is_selected:
+            self.setStyleSheet("border-color: #6366f1; color: #1e293b;")
+        else:
+            self.setStyleSheet("")
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
@@ -52,46 +167,68 @@ class ImportPage(QWidget):
 
         layout.addStretch(1)
 
-        # 標題（HTML 雙色）
-        title = QLabel()
-        title.setTextFormat(Qt.RichText)
-        title.setText(
-            '<span style="font-size:38pt; font-weight:800; '
-            'font-family:\'Segoe UI\',\'Microsoft JhengHei\';">'
-            '<span style="color:#c4b5ff;">音樂</span>'
-            '<span style="color:#00d4ff;">分源</span>'
-            '<span style="color:#c4b5ff;">程式</span>'
-            '</span>'
-        )
-        title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("margin-bottom: 6px;")
-        layout.addWidget(title)
+        # ── 標題列：icon 與標題文字同行，副標題縮排對齊 ──
+        header_col = QVBoxLayout()
+        header_col.setSpacing(2)
+        header_col.setContentsMargins(0, 0, 0, 0)
 
-        # 副標題
-        subtitle = QLabel("✦  AI 自動拆分人聲 · 鼓 · 貝斯 · 吉他 · 鋼琴 · 其他音軌  ✦")
-        subtitle.setAlignment(Qt.AlignCenter)
+        # 第一行：icon + 漸層標題（垂直置中對齊）
+        icon_title_row = QHBoxLayout()
+        icon_title_row.setSpacing(14)
+        icon_title_row.setAlignment(Qt.AlignVCenter)
+
+        icon_widget = GradientIconWidget()
+        icon_title_row.addWidget(icon_widget, 0, Qt.AlignVCenter)
+
+        grad_title = GradientLabel("音樂分源程式")
+        icon_title_row.addWidget(grad_title, 0, Qt.AlignVCenter)
+
+        header_col.addLayout(icon_title_row)
+
+        # 第二行：副標題置中於整個 icon+標題 區塊
+        subtitle_row = QHBoxLayout()
+        subtitle_row.addStretch()
+        subtitle = QLabel("AI 自動分離各聲部音軌")
         subtitle.setStyleSheet(
-            "color: #454590; font-size: 13px; "
-            "letter-spacing: 1px; margin-bottom: 24px;"
+            "color: #888888; font-size: 12px; background: transparent;"
         )
-        layout.addWidget(subtitle)
+        subtitle_row.addWidget(subtitle)
+        subtitle_row.addStretch()
+        header_col.addLayout(subtitle_row)
 
-        # 拖曳區域
+        title_row = QHBoxLayout()
+        title_row.addLayout(header_col)
+        title_row.addStretch()
+
+        # 整體置中
+        center_row = QHBoxLayout()
+        center_row.addStretch()
+        center_row.addLayout(title_row)
+        center_row.addStretch()
+        layout.addLayout(center_row)
+
+        layout.addSpacing(10)
+
+        # ── 音軌 chips ──
+        chip_row = QHBoxLayout()
+        chip_row.setAlignment(Qt.AlignCenter)
+        chip_row.setSpacing(6)
+        for text in ['人聲', '鼓', '貝斯', '吉他', '鋼琴', '其他']:
+            chip = QLabel(text)
+            chip.setObjectName("TrackChip")
+            chip_row.addWidget(chip)
+        layout.addLayout(chip_row)
+
+        layout.addSpacing(22)
+
+        # ── 拖曳區域 ──
         self._drop_zone = DropZoneLabel(self)
         self._drop_zone.mousePressEvent = lambda e: self._browse_file()
         layout.addWidget(self._drop_zone)
 
-        # 已選擇檔案
-        self._file_lbl = QLabel("")
-        self._file_lbl.setAlignment(Qt.AlignCenter)
-        self._file_lbl.setStyleSheet(
-            "color: #7B61FF; font-size: 12px; margin-top: 8px; font-weight: bold;"
-        )
-        layout.addWidget(self._file_lbl)
-
         layout.addSpacing(20)
 
-        # 開始按鈕
+        # ── 開始按鈕 ──
         self._start_btn = QPushButton("✦  開始分離")
         self._start_btn.setObjectName("MasterPlayBtn")
         self._start_btn.setEnabled(False)
@@ -107,9 +244,7 @@ class ImportPage(QWidget):
     def set_file(self, path: str):
         self._file_path = path
         name = os.path.basename(path)
-        self._file_lbl.setText(f"✔  {name}")
-        self._drop_zone.setText(f"✔  {name}\n\n點擊重新選擇")
-        self._drop_zone.setStyleSheet("border-color: #7B61FF; color: #a090ff;")
+        self._drop_zone.set_selected(name)
         self._start_btn.setEnabled(True)
 
     def _browse_file(self):

@@ -4,15 +4,24 @@ MIDI 分析視窗
 - 播放合成 MIDI 音頻
 - 開啟五線譜 / 簡譜視窗
 """
+import time
+
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QProgressBar, QMessageBox,
+    QPushButton, QProgressBar, QMessageBox, QWidget,
 )
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 
 from core.player import TrackState
 from core.transcriber import TranscriberThread, convert_raw_to_jianpu
 from ui.waveform_widget import WaveformWidget
+from ui.main_window import GradientIconWidget
+
+
+_CHIP_STYLE = (
+    "background:#EEEDFE; color:#534AB7; font-size:11px; "
+    "font-weight:600; padding:3px 8px; border-radius:5px;"
+)
 
 
 class MidiView(QDialog):
@@ -23,10 +32,11 @@ class MidiView(QDialog):
         self.track = track
         self.label = label
         self._file_title = file_title or label
-        self._initial_tempo = initial_tempo     # 來自 result_view，0 表示未指定
-        self._initial_key = initial_key         # 來自 result_view，空表示未指定
+        self._initial_tempo = initial_tempo
+        self._initial_key = initial_key
         self.setWindowTitle(f"MIDI — {label}")
-        self.resize(900, 480)
+        self.resize(900, 380)
+        self.setMinimumSize(700, 320)
 
         self._raw_notes = None
         self._jianpu_notes = None
@@ -35,8 +45,13 @@ class MidiView(QDialog):
         self._thread = None
         self._synth_audio = None
         self._is_playing = False
+        self._seek_ratio = 0.0
+        self._play_start_ratio = 0.0
+        self._play_start_time = 0.0
+
         self._poll_timer = QTimer(self)
-        self._poll_timer.timeout.connect(self._check_playback)
+        self._poll_timer.setInterval(50)
+        self._poll_timer.timeout.connect(self._update_playback)
 
         self._build_ui()
         self._start_transcription()
@@ -50,32 +65,70 @@ class MidiView(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        # 標題
+        # ── 標題列：icon + 文字 + chips ──
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+
+        icon = GradientIconWidget()
+        icon.setFixedSize(32, 32)
+        header_row.addWidget(icon, 0)
+
+        # 中：標題 + 狀態
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        text_col.setContentsMargins(0, 0, 0, 0)
+
         title_lbl = QLabel(f"MIDI — {self.label}")
         title_lbl.setStyleSheet(
-            "font-size: 15px; font-weight: bold; color: #c4b5ff; margin-bottom: 2px;"
+            "font-size: 14px; font-weight: bold; color: #534AB7;"
         )
-        root.addWidget(title_lbl)
+        text_col.addWidget(title_lbl)
 
-        # 進度（分析期間顯示）
-        self._progress_lbl = QLabel("音高分析中...")
-        root.addWidget(self._progress_lbl)
+        self._status_lbl = QLabel("音高分析中...")
+        self._status_lbl.setStyleSheet(
+            "font-size: 10px; color: #999999;"
+        )
+        text_col.addWidget(self._status_lbl)
 
+        header_row.addLayout(text_col, 1)
+
+        # 右：調性 / BPM chips（初始隱藏）
+        self._key_chip = QLabel("—")
+        self._key_chip.setStyleSheet(_CHIP_STYLE)
+        self._key_chip.setVisible(False)
+        header_row.addWidget(self._key_chip, 0)
+
+        self._tempo_chip = QLabel("— BPM")
+        self._tempo_chip.setStyleSheet(_CHIP_STYLE)
+        self._tempo_chip.setVisible(False)
+        header_row.addWidget(self._tempo_chip, 0)
+
+        root.addLayout(header_row)
+
+        # ── 分析進度條（分析期間顯示）──
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         root.addWidget(self._progress_bar)
 
-        # 波形顯示（分析完成後才載入）
+        # ── 波形（含左右 padding 容器，分析完成後才載入）──
+        waveform_container = QWidget()
+        wc_layout = QVBoxLayout(waveform_container)
+        wc_layout.setContentsMargins(12, 4, 12, 4)
+        wc_layout.setSpacing(0)
+
         self._waveform = WaveformWidget(None)
-        self._waveform.setMinimumHeight(120)
+        self._waveform.setMinimumHeight(150)
+        self._waveform.setMaximumHeight(250)
         self._waveform.setVisible(False)
-        root.addWidget(self._waveform, stretch=1)
+        self._waveform.seek_requested.connect(self._on_waveform_seek)
+        wc_layout.addWidget(self._waveform)
+
+        root.addWidget(waveform_container, stretch=1)
 
         # ── 控制列 ──
         ctrl = QHBoxLayout()
         ctrl.setSpacing(8)
 
-        # 播放 / 停止
         self._play_btn = QPushButton("▶ 播放 MIDI")
         self._play_btn.setObjectName("MasterPlayBtn")
         self._play_btn.setEnabled(False)
@@ -83,7 +136,6 @@ class MidiView(QDialog):
         self._play_btn.clicked.connect(self._toggle_play)
         ctrl.addWidget(self._play_btn)
 
-        # 五線譜
         self._staff_btn = QPushButton("📜 五線譜")
         self._staff_btn.setObjectName("JianpuBtn")
         self._staff_btn.setEnabled(False)
@@ -92,7 +144,6 @@ class MidiView(QDialog):
         self._staff_btn.clicked.connect(self._open_staff)
         ctrl.addWidget(self._staff_btn)
 
-        # 簡譜
         self._jianpu_btn = QPushButton("♩ 簡譜")
         self._jianpu_btn.setObjectName("JianpuBtn")
         self._jianpu_btn.setEnabled(False)
@@ -102,12 +153,6 @@ class MidiView(QDialog):
         ctrl.addWidget(self._jianpu_btn)
 
         ctrl.addStretch()
-
-        # 調性 / 速度（唯讀顯示，由 Mixer 控制）
-        self._key_tempo_lbl = QLabel("—")
-        self._key_tempo_lbl.setObjectName("SmallLabel")
-        ctrl.addWidget(self._key_tempo_lbl)
-
         root.addLayout(ctrl)
 
     # ──────────────────────────────────────────────
@@ -115,11 +160,11 @@ class MidiView(QDialog):
     # ──────────────────────────────────────────────
 
     def _start_transcription(self):
-        # 預先顯示來自 Mixer 的值（最終值在 _on_done 更新）
         if self._initial_tempo > 0 or self._initial_key:
             key_display = self._initial_key or '偵測中'
             tempo_display = int(self._initial_tempo) if self._initial_tempo > 0 else '—'
-            self._key_tempo_lbl.setText(f"{key_display}　{tempo_display} BPM")
+            self._key_chip.setText(key_display)
+            self._tempo_chip.setText(f"{tempo_display} BPM")
 
         self._waveform.set_position(0.0)
         self._thread = TranscriberThread(
@@ -133,7 +178,7 @@ class MidiView(QDialog):
         self._thread.start()
 
     def _on_progress(self, msg: str, pct: int):
-        self._progress_lbl.setText(msg)
+        self._status_lbl.setText(msg)
         self._progress_bar.setValue(pct)
 
     def _on_done(self, raw_notes, jianpu_notes, tempo, key, beat_dur):
@@ -142,12 +187,15 @@ class MidiView(QDialog):
         self._auto_key = key
         self._auto_tempo = tempo
 
-        self._progress_lbl.setVisible(False)
         self._progress_bar.setVisible(False)
 
-        self._key_tempo_lbl.setText(f"{key}　{int(tempo)} BPM")
+        self._key_chip.setText(key)
+        self._tempo_chip.setText(f"{int(tempo)} BPM")
+        self._key_chip.setVisible(True)
+        self._tempo_chip.setVisible(True)
 
-        # 分析完成後才顯示波形
+        self._status_lbl.setText("音高分析完成")
+
         self._waveform._load_audio(self.track.audio)
         self._waveform.setVisible(True)
 
@@ -155,8 +203,12 @@ class MidiView(QDialog):
         self._staff_btn.setEnabled(True)
         self._jianpu_btn.setEnabled(True)
 
+        # 分析完成後立即在背景預合成 MIDI 音頻，避免第一次按播放時卡住
+        import threading
+        threading.Thread(target=self._presynthesize, daemon=True).start()
+
     def _on_error(self, msg: str):
-        self._progress_lbl.setText("分析失敗")
+        self._status_lbl.setText("分析失敗")
         self._progress_bar.setVisible(False)
         QMessageBox.critical(self, "轉寫失敗", msg)
 
@@ -164,31 +216,46 @@ class MidiView(QDialog):
     # MIDI 播放
     # ──────────────────────────────────────────────
 
+    def _on_waveform_seek(self, ratio: float):
+        self._seek_ratio = ratio
+        self._waveform.set_position(ratio)
+        if self._is_playing:
+            self._start_play_from(ratio)
+
+    def _presynthesize(self):
+        from core.midi_synth import synthesize
+        audio = synthesize(self._jianpu_notes, self._auto_tempo, self._auto_key)
+        self._synth_audio = audio  # GIL 保證賦值原子性
+
     def _toggle_play(self):
         if self._is_playing:
             self._stop_play()
             return
-
         if self._jianpu_notes is None:
             return
-
-        # 合成音頻（快取）
         if self._synth_audio is None:
+            # 背景合成尚未完成，同步等待
             from core.midi_synth import synthesize
             self._synth_audio = synthesize(
                 self._jianpu_notes, self._auto_tempo, self._auto_key
             )
+        self._start_play_from(self._seek_ratio)
 
+    def _start_play_from(self, ratio: float):
+        import sounddevice as sd
+        total = len(self._synth_audio)
+        start_sample = int(max(0.0, min(1.0, ratio)) * total)
         try:
-            import sounddevice as sd
-            sd.play(self._synth_audio, samplerate=44100)
+            sd.stop()
+            sd.play(self._synth_audio[start_sample:], samplerate=44100, latency='low')
         except Exception as e:
             QMessageBox.warning(self, "播放失敗", str(e))
             return
-
         self._is_playing = True
+        self._play_start_ratio = ratio
+        self._play_start_time = time.time()
         self._play_btn.setText("⏹ 停止")
-        self._poll_timer.start(300)
+        self._poll_timer.start()
 
     def _stop_play(self):
         self._poll_timer.stop()
@@ -200,10 +267,21 @@ class MidiView(QDialog):
         self._is_playing = False
         self._play_btn.setText("▶ 播放 MIDI")
 
-    def _check_playback(self):
+    def _update_playback(self):
+        import sounddevice as sd
+        # 更新波形播放頭位置
+        if self._synth_audio is not None:
+            total_dur = len(self._synth_audio) / 44100
+            if total_dur > 0:
+                elapsed = time.time() - self._play_start_time
+                ratio = self._play_start_ratio + elapsed / total_dur
+                ratio = min(ratio, 1.0)
+                self._waveform.set_position(ratio)
+        # 檢查是否播放結束
         try:
-            import sounddevice as sd
             if not sd.get_stream().active:
+                self._seek_ratio = 0.0
+                self._waveform.set_position(0.0)
                 self._stop_play()
         except Exception:
             self._stop_play()

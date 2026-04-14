@@ -5,7 +5,7 @@
 
 #define AppName      "音樂分源程式"
 #define AppNameEn    "MusicSplitter"
-#define AppVersion   "1.0.0"
+#define AppVersion   "1.1.0"
 #define AppPublisher "MyStudio"
 #define AppExeName   "MusicSplitter.exe"
 
