@@ -124,11 +124,10 @@ if exist "ffmpeg.exe" (
     goto ffmpeg_done
 )
 
-:: 檢查系統是否已安裝 ffmpeg
-where ffmpeg >nul 2>&1
-if not errorlevel 1 (
+:: 檢查系統是否已安裝 ffmpeg（用 PowerShell 取得乾淨路徑，避免編碼問題）
+for /f "usebackq delims=" %%i in (`powershell -ExecutionPolicy Bypass -Command "(Get-Command ffmpeg -ErrorAction SilentlyContinue).Source"`) do set "SYS_FFMPEG=%%i"
+if defined SYS_FFMPEG (
     echo     從系統 PATH 複製 ffmpeg...
-    for /f "tokens=*" %%i in ('where ffmpeg') do set "SYS_FFMPEG=%%i"
     copy /y "!SYS_FFMPEG!" "%FFMPEG_DEST%" >nul
     goto ffmpeg_done
 )
@@ -169,8 +168,8 @@ echo.
 echo.
 echo [7/7] 建立發布套件...
 
-set "OUT_NAME=音樂分源程式_安裝檔_v%APP_VERSION%_%VERSION_SUFFIX%"
-set "ZIP_NAME=音樂分源程式_v%APP_VERSION%_%VERSION_SUFFIX%"
+set "OUT_NAME=MusicSplitter_v%APP_VERSION%_%VERSION_SUFFIX%_Setup"
+set "ZIP_NAME=MusicSplitter_v%APP_VERSION%_%VERSION_SUFFIX%"
 
 :: 優先嘗試 Inno Setup
 if exist "%INNO_PATH%" (
@@ -190,7 +189,7 @@ if exist "%INNO_PATH%" (
 :: Inno Setup 不存在就改用 PowerShell 壓 ZIP
 echo     Inno Setup 未安裝，改為建立 ZIP 壓縮檔...
 if not exist "dist\release" mkdir "dist\release"
-powershell -Command "Compress-Archive -Path 'dist\MusicSplitter' -DestinationPath 'dist\release\%ZIP_NAME%.zip' -Force"
+powershell -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\MusicSplitter' -DestinationPath 'dist\release\%ZIP_NAME%.zip' -Force"
 
 if errorlevel 1 (
     echo [錯誤] ZIP 建立失敗
