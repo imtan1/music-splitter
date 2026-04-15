@@ -88,6 +88,11 @@ a = Analysis(
         'demucs.pretrained',
         'demucs.apply',
         'demucs.audio',
+        # Standard library (dynamically imported by torch.distributed)
+        'unittest',
+        'unittest.mock',
+        'distutils',
+        'distutils.version',
     ],
     hookspath=[],
     hooksconfig={},
