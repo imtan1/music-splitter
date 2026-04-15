@@ -100,7 +100,7 @@ a = Analysis(
     excludes=[
         'tkinter', 'PyQt5', 'PyQt6', 'PySide2',
         'IPython', 'jupyter', 'notebook',
-        'test', 'unittest', 'xmlrunner',
+        'test', 'xmlrunner',
     ],
     noarchive=False,
 )
