@@ -41,19 +41,30 @@ cd /d "%APP_DIR%"
 :: Step 1：檢查 Python
 :: ──────────────────────────────────────────────
 echo [1/7] 檢查 Python 環境...
+
+:: 依序嘗試 python / py，找到可用的指令
+set "PYTHON_CMD="
 python --version >nul 2>&1
-if errorlevel 1 (
+if not errorlevel 1 set "PYTHON_CMD=python"
+
+if not defined PYTHON_CMD (
+    py --version >nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=py"
+)
+
+if not defined PYTHON_CMD (
     echo [錯誤] 找不到 Python，請確認已安裝 Python 3.10+ 並加入 PATH
     pause & exit /b 1
 )
-python --version
+
+%PYTHON_CMD% --version
 
 :: ──────────────────────────────────────────────
 :: Step 2：安裝對應版本的 PyTorch
 :: ──────────────────────────────────────────────
 echo.
 echo [2/7] 安裝 %BUILD_LABEL% PyTorch...
-pip install torch torchaudio --index-url "%TORCH_INDEX%" --quiet
+%PYTHON_CMD% -m pip install torch torchaudio --index-url "%TORCH_INDEX%" --quiet
 if errorlevel 1 (
     echo [錯誤] PyTorch 安裝失敗，請檢查網路連線
     pause & exit /b 1
@@ -65,7 +76,7 @@ echo     PyTorch ^(%BUILD_LABEL%^) 就緒
 :: ──────────────────────────────────────────────
 echo.
 echo [3/7] 安裝 PyInstaller...
-pip install "pyinstaller==5.13.2" --quiet
+%PYTHON_CMD% -m pip install "pyinstaller==5.13.2" --quiet
 if errorlevel 1 (
     echo [錯誤] PyInstaller 安裝失敗
     pause & exit /b 1
@@ -88,7 +99,7 @@ echo.
 echo [5/7] 執行 PyInstaller 打包（可能需要 10~20 分鐘）...
 echo.
 
-pyinstaller build.spec --noconfirm --clean
+%PYTHON_CMD% -m PyInstaller build.spec --noconfirm --clean
 
 if errorlevel 1 (
     echo.
