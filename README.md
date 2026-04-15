@@ -168,27 +168,27 @@ music-splitter/
 
 ---
 
-## 建置 Windows 安裝檔
+## 建置獨立執行檔（Windows .exe）
 
-若要將程式打包成 `.exe` 安裝檔，需要額外安裝：
+雙擊 **`build.bat`**，選擇 CPU 或 GPU 版本，腳本會自動完成所有步驟：
 
-| 工具 | 用途 | 安裝方式 |
+1. 安裝對應版本的 PyTorch（CPU 或 CUDA）
+2. 安裝 PyInstaller
+3. 清除舊的建置資料
+4. PyInstaller 打包
+5. 複製 FFmpeg（如系統已安裝）
+
+| 版本 | 大小 | 適用對象 |
 |------|------|---------|
-| PyInstaller | 將 Python 打包成執行檔 | `pip install pyinstaller` |
-| Inno Setup 6 | 建立 Windows 安裝精靈 | https://jrsoftware.org/isinfo.php |
-
-```bash
-build.bat
-```
-
-建置腳本會依序：清除舊建置 → PyInstaller 打包 → Inno Setup 封裝安裝檔。
+| CPU | ~700 MB | 所有 Windows 電腦 |
+| GPU | ~1.6 GB | 有 NVIDIA GPU，分源速度快 10–20 倍 |
 
 | 輸出 | 位置 |
 |------|------|
 | 執行檔資料夾 | `dist\MusicSplitter\` |
-| Windows 安裝檔 | `dist\installer\音樂分源程式_安裝檔_v1.0.0.exe` |
+| 主程式 | `dist\MusicSplitter\MusicSplitter.exe` |
 
-> 因包含 PyTorch 與 Demucs，打包後總大小約 **500–800 MB**。
+> 直接將整個 `dist\MusicSplitter\` 資料夾複製給使用者即可，不需要安裝任何額外軟體。
 
 ---
 
