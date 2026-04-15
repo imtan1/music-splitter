@@ -76,7 +76,7 @@ echo     PyTorch ^(%BUILD_LABEL%^) 就緒
 :: ──────────────────────────────────────────────
 echo.
 echo [3/7] 安裝 PyInstaller...
-%PYTHON_CMD% -m pip install "pyinstaller==5.13.2" --quiet
+%PYTHON_CMD% -m pip install --upgrade pyinstaller --quiet
 if errorlevel 1 (
     echo [錯誤] PyInstaller 安裝失敗
     pause & exit /b 1
