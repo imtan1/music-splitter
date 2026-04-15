@@ -32,7 +32,6 @@ echo.
 echo 將建置：%BUILD_LABEL%
 echo.
 
-set "INNO_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 set "APP_DIR=%~dp0"
 set "APP_VERSION=1.1.0"
 cd /d "%APP_DIR%"
@@ -40,7 +39,7 @@ cd /d "%APP_DIR%"
 :: ──────────────────────────────────────────────
 :: Step 1：檢查 Python
 :: ──────────────────────────────────────────────
-echo [1/7] 檢查 Python 環境...
+echo [1/6] 檢查 Python 環境...
 
 :: 依序嘗試 python / py，找到可用的指令
 set "PYTHON_CMD="
@@ -63,7 +62,7 @@ if not defined PYTHON_CMD (
 :: Step 2：安裝對應版本的 PyTorch
 :: ──────────────────────────────────────────────
 echo.
-echo [2/7] 安裝 %BUILD_LABEL% PyTorch...
+echo [2/6] 安裝 %BUILD_LABEL% PyTorch...
 %PYTHON_CMD% -m pip install torch torchaudio --index-url "%TORCH_INDEX%" --quiet
 if errorlevel 1 (
     echo [錯誤] PyTorch 安裝失敗，請檢查網路連線
@@ -75,7 +74,7 @@ echo     PyTorch ^(%BUILD_LABEL%^) 就緒
 :: Step 3：安裝 PyInstaller
 :: ──────────────────────────────────────────────
 echo.
-echo [3/7] 安裝 PyInstaller...
+echo [3/6] 安裝 PyInstaller...
 %PYTHON_CMD% -m pip install --upgrade pyinstaller --quiet
 if errorlevel 1 (
     echo [錯誤] PyInstaller 安裝失敗
@@ -87,7 +86,7 @@ echo     PyInstaller 就緒
 :: Step 4：清除舊的 build / dist
 :: ──────────────────────────────────────────────
 echo.
-echo [4/7] 清除舊的建置資料...
+echo [4/6] 清除舊的建置資料...
 if exist "build"              rmdir /s /q "build"
 if exist "dist\MusicSplitter" rmdir /s /q "dist\MusicSplitter"
 echo     清除完成
@@ -96,7 +95,7 @@ echo     清除完成
 :: Step 5：PyInstaller 打包
 :: ──────────────────────────────────────────────
 echo.
-echo [5/7] 執行 PyInstaller 打包（可能需要 10~20 分鐘）...
+echo [5/6] 執行 PyInstaller 打包（可能需要 10~20 分鐘）...
 echo.
 
 %PYTHON_CMD% -m PyInstaller build.spec --noconfirm --clean
@@ -113,7 +112,7 @@ echo     打包成功！
 :: Step 6：下載並放入 FFmpeg
 :: ──────────────────────────────────────────────
 echo.
-echo [6/7] 處理 FFmpeg...
+echo [6/6] 處理 FFmpeg...
 
 set "FFMPEG_DEST=dist\MusicSplitter\ffmpeg.exe"
 
@@ -163,44 +162,10 @@ echo.
 :ffmpeg_done
 
 :: ──────────────────────────────────────────────
-:: Step 7：建立 ZIP 或 Inno Setup 安裝檔
-:: ──────────────────────────────────────────────
-echo.
-echo [7/7] 建立發布套件...
-
-set "OUT_NAME=MusicSplitter_v%APP_VERSION%_%VERSION_SUFFIX%_Setup"
-set "ZIP_NAME=MusicSplitter_v%APP_VERSION%_%VERSION_SUFFIX%"
-
-:: 優先嘗試 Inno Setup
-if exist "%INNO_PATH%" (
-    echo     使用 Inno Setup 建立安裝檔...
-    if not exist "dist\installer" mkdir "dist\installer"
-    "%INNO_PATH%" installer.iss /DVersionSuffix=%VERSION_SUFFIX%
-    if not errorlevel 1 (
-        echo.
-        echo ============================================================
-        echo   建置完成！[%BUILD_LABEL%]
-        echo   安裝檔：dist\installer\%OUT_NAME%.exe
-        echo ============================================================
-        pause & exit /b 0
-    )
-)
-
-:: Inno Setup 不存在就改用 PowerShell 壓 ZIP
-echo     Inno Setup 未安裝，改為建立 ZIP 壓縮檔...
-if not exist "dist\release" mkdir "dist\release"
-powershell -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\MusicSplitter' -DestinationPath 'dist\release\%ZIP_NAME%.zip' -Force"
-
-if errorlevel 1 (
-    echo [錯誤] ZIP 建立失敗
-    pause & exit /b 1
-)
-
 echo.
 echo ============================================================
-echo   建置完成！[%BUILD_LABEL%]
-echo   ZIP 檔案：dist\release\%ZIP_NAME%.zip
-echo   使用方式：解壓後直接執行 MusicSplitter.exe
+echo   Build complete! [%BUILD_LABEL%]
+echo   Output: dist\MusicSplitter\MusicSplitter.exe
 echo ============================================================
 echo.
 pause
