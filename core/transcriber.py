@@ -1,6 +1,6 @@
 """
 音頻 → 簡譜音符轉換
-使用 parselmouth (Praat) 偵測音高，music21 做節奏量化。
+使用 Spotify Basic Pitch 偵測音高，music21 做節奏量化。
 """
 import numpy as np
 from PySide6.QtCore import QThread, Signal
@@ -68,104 +68,70 @@ class TranscriberThread(QThread):
     def run(self):
         try:
             mono = self.audio.mean(axis=1) if self.audio.ndim == 2 else self.audio
+            mono = mono.astype(np.float32)
+            sr = self.sr
 
-            # 降採樣到 22050 Hz，減少分析計算量
-            # 44100→22050 為整數比 2:1，直接每兩個取一個，速度比 librosa.resample 快百倍
+            # BPM — 用降採樣短段快速估計
             ANALYSIS_SR = 22050
-            self.progress.emit("音頻前處理中...", 5)
-            if self.sr == 44100:
-                mono = mono[::2]
-                sr = ANALYSIS_SR
-            elif self.sr != ANALYSIS_SR:
+            self.progress.emit("偵測節拍（BPM）...", 5)
+            if sr == 44100:
+                mono_ds = mono[::2]
+            elif sr != ANALYSIS_SR:
                 from scipy.signal import resample_poly
                 import math
-                g = math.gcd(self.sr, ANALYSIS_SR)
-                mono = resample_poly(mono, ANALYSIS_SR // g, self.sr // g).astype(np.float32)
-                sr = ANALYSIS_SR
+                g = math.gcd(sr, ANALYSIS_SR)
+                mono_ds = resample_poly(mono, ANALYSIS_SR // g, sr // g).astype(np.float32)
             else:
-                sr = self.sr
+                mono_ds = mono
 
-            # BPM — 若外部已提供則直接使用，否則快速偵測
             if self.initial_tempo > 0:
-                self.progress.emit("使用指定 BPM...", 10)
                 tempo = self.initial_tempo
             else:
-                self.progress.emit("偵測節拍（BPM）...", 10)
-                tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
+                tempo = _estimate_tempo_fast(mono_ds[:ANALYSIS_SR * 10], ANALYSIS_SR)
             beat_dur = 60.0 / tempo
 
-            # parselmouth (Praat) 音高偵測，分 10 秒段處理讓進度條持續更新
-            HOP = 512
-            CHUNK_SEC = 10
-            # 固定常數，不 import librosa 避免觸發 numba JIT 編譯
-            FMIN = 65.406   # C2
-            FMAX = 2093.005  # C7
-            try:
-                import parselmouth
-                fmin = FMIN
-                fmax = FMAX
-                chunk_samples = sr * CHUNK_SEC
-                total_samples = len(mono)
-                n_chunks = max(1, (total_samples + chunk_samples - 1) // chunk_samples)
-                f0_parts, times_parts = [], []
+            # Spotify Basic Pitch 音高偵測
+            self.progress.emit("載入 Basic Pitch 模型...", 10)
+            from basic_pitch.inference import predict as bp_predict
+            from basic_pitch import ICASSP_2022_MODEL_PATH
 
-                for i in range(n_chunks):
-                    pct = 20 + int(35 * i / n_chunks)
-                    self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
-                    s = i * chunk_samples
-                    e = min(s + chunk_samples, total_samples)
-                    # 每段各自轉 float64，避免一次性大記憶體分配
-                    chunk = mono[s:e].astype(np.float64)
-                    snd = parselmouth.Sound(chunk, sampling_frequency=sr)
-                    pitch_obj = snd.to_pitch_ac(
-                        time_step=HOP / sr,
-                        pitch_floor=fmin,
-                        pitch_ceiling=fmax,
-                    )
-                    f0_c = pitch_obj.selected_array['frequency'].astype(np.float32)
-                    t_offset = s / sr
-                    t_c = (pitch_obj.start_time + np.arange(len(f0_c)) * pitch_obj.time_step + t_offset).astype(np.float32)
-                    f0_parts.append(f0_c)
-                    times_parts.append(t_c)
+            self.progress.emit("Basic Pitch 音高分析中...", 15)
+            _, _, note_events = bp_predict(
+                (mono, sr),
+                model_or_model_path=ICASSP_2022_MODEL_PATH,
+                onset_threshold=0.5,
+                frame_threshold=0.3,
+                minimum_note_length=58,
+                minimum_frequency=65.0,    # C2
+                maximum_frequency=2093.0,  # C7
+                multiple_pitch_bends=False,
+                melodia_trick=True,
+            )
 
-                self.progress.emit("整理音高資料...", 55)
-                f0 = np.concatenate(f0_parts)
-                times = np.concatenate(times_parts)
-                voiced = f0 > 0
-            except ImportError:
-                # fallback: librosa pyin 分段處理（parselmouth 未安裝時使用）
-                import librosa
-                chunk_size = sr * 30
-                total_samples = len(mono)
-                n_chunks = max(1, (total_samples + chunk_size - 1) // chunk_size)
-                f0_parts, voiced_parts = [], []
-                for i in range(n_chunks):
-                    pct = 25 + int(30 * i / n_chunks)
-                    self.progress.emit(f"音高分析中... ({i+1}/{n_chunks})", pct)
-                    start = i * chunk_size
-                    end = min(start + chunk_size, total_samples)
-                    chunk = mono[start:end]
-                    f0_c, v_c, _ = librosa.pyin(
-                        chunk, fmin=FMIN, fmax=FMAX, sr=sr, hop_length=HOP,
-                    )
-                    f0_parts.append(f0_c)
-                    voiced_parts.append(v_c)
-                f0 = np.concatenate(f0_parts)
-                voiced = np.concatenate(voiced_parts)
-                n_frames = len(f0)
-                times = (np.arange(n_frames) * HOP / sr).astype(np.float32)
+            self.progress.emit("整理音符...", 75)
+            # 轉換為 raw_notes 格式，並從間隔推算休止符
+            note_list = sorted(
+                [(float(s), float(e), int(p)) for s, e, p, *_ in note_events],
+                key=lambda x: x[0],
+            )
+            raw = []
+            prev_end = 0.0
+            min_rest = beat_dur * 0.12
+            for start_t, end_t, pitch_midi in note_list:
+                gap = start_t - prev_end
+                if gap > min_rest:
+                    raw.append({'midi': None, 'start': prev_end, 'dur': gap})
+                raw.append({'midi': pitch_midi, 'start': start_t, 'dur': end_t - start_t})
+                prev_end = end_t
 
-            self.progress.emit("分割音符...", 65)
-            raw = _segment_notes(f0, voiced, times, beat_dur)
-
-            # 調性 — 若外部已指定則直接使用，否則自動偵測
+            # 調性
             if self.initial_key and self.initial_key not in ('', '自動偵測'):
                 key = self.initial_key
             else:
-                self.progress.emit("偵測調性...", 75)
+                self.progress.emit("偵測調性...", 80)
                 key = _detect_key(raw)
 
-            self.progress.emit("節奏量化中（music21）...", 80)
+            self.progress.emit("節奏量化中（music21）...", 85)
             notes = _to_jianpu_music21(raw, key, beat_dur)
 
             self.progress.emit("完成！", 100)
