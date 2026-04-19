@@ -1,6 +1,17 @@
 import sys
 import os
 import threading
+import subprocess
+
+# Windows 上所有 subprocess（ffmpeg、demucs AudioFile 等）隱藏終端機視窗
+if sys.platform == 'win32':
+    _CREATE_NO_WINDOW = 0x08000000
+    _OrigPopen = subprocess.Popen
+    class _SilentPopen(_OrigPopen):
+        def __init__(self, *args, **kwargs):
+            kwargs['creationflags'] = kwargs.get('creationflags', 0) | _CREATE_NO_WINDOW
+            super().__init__(*args, **kwargs)
+    subprocess.Popen = _SilentPopen
 
 # GPU 機器上 numba 首次 import 時會 JIT 編譯大量 kernel，造成程式凍結數分鐘。
 # 停用 numba CUDA，並在背景預熱 librosa，讓使用者使用 MIDI 功能時不再等待。

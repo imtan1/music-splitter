@@ -90,7 +90,14 @@ def render_staff_svg(
 
     # ── verovio 渲染 SVG ──
     try:
+        import sys as _sys
         tk = verovio.toolkit()
+        # PyInstaller bundle 中指定 verovio 資源目錄（MEI schema 等）
+        if hasattr(_sys, '_MEIPASS'):
+            import os as _os
+            vdata = _os.path.join(_sys._MEIPASS, 'verovio', 'data')
+            if _os.path.isdir(vdata):
+                tk.setResourcePath(vdata)
         tk.setOptions({
             'adjustPageHeight': True,
             'pageWidth': 2200,

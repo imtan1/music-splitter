@@ -20,7 +20,7 @@ all_binaries = []
 all_hidden   = []
 
 for pkg in ['demucs', 'librosa', 'audioread', 'soundfile', 'resampy',
-            'soxr', 'lazy_loader', 'msgpack']:
+            'soxr', 'lazy_loader', 'msgpack', 'verovio', 'music21']:
     d, b, h = collect_all(pkg)
     all_datas    += d
     all_binaries += b
