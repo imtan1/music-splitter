@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QProgressBar, QMessageBox, QWidget, QSlider,
 )
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 
 from core.player import TrackState
 from core.transcriber import TranscriberThread, convert_raw_to_jianpu
@@ -25,15 +25,24 @@ _CHIP_STYLE = (
 
 
 class MidiView(QDialog):
+    # 分析完成後發出，讓 TrackChannel 快取 raw_notes/tempo/beat_dur
+    analysis_ready = Signal(list, float, float)  # raw_notes, tempo, beat_dur
+
     def __init__(self, track: TrackState, label: str, parent=None,
                  file_title: str = '', initial_tempo: float = 0.0,
-                 initial_key: str = ''):
+                 initial_key: str = '',
+                 precomputed: tuple = None):
+        """
+        precomputed: (raw_notes, tempo, beat_dur) 快取資料。
+        若提供，跳過音高分析，直接用新 key 重新轉換，幾乎即時。
+        """
         super().__init__(parent)
         self.track = track
         self.label = label
         self._file_title = file_title or label
         self._initial_tempo = initial_tempo
         self._initial_key = initial_key
+        self._precomputed = precomputed
         self.setWindowTitle(f"MIDI — {label}")
         self.resize(900, 380)
         self.setMinimumSize(700, 320)
