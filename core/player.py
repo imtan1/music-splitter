@@ -104,11 +104,17 @@ class AudioEngine(QObject):
 
     def pause(self):
         self._playing = False
-        if self._stream:
-            self._stream.abort()
-            self._stream.close()
-            self._stream = None
         self._timer.stop()
+        stream, self._stream = self._stream, None   # 原子性取走，避免 race condition
+        if stream:
+            try:
+                stream.abort()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     def stop(self):
         self.pause()
@@ -154,10 +160,19 @@ class AudioEngine(QObject):
             raise sd.CallbackStop()
 
     def _on_stream_finished(self):
+        # 由 sounddevice 執行緒呼叫——只能 emit signal，不可碰 QTimer
+        from PySide6.QtCore import QMetaObject, Qt
+        QMetaObject.invokeMethod(self, '_cleanup_after_finish', Qt.QueuedConnection)
+
+    def _cleanup_after_finish(self):
+        """排回主執行緒執行：停 timer、關 stream、發出訊號。"""
         self._timer.stop()
-        if self._stream:
-            self._stream.close()
-            self._stream = None
+        stream, self._stream = self._stream, None
+        if stream:
+            try:
+                stream.close()
+            except Exception:
+                pass
         self.position_changed.emit(min(1.0, self.get_position_ratio()))
         self.playback_stopped.emit()
 
@@ -214,12 +229,18 @@ class SingleTrackPlayer(QObject):
         self._timer.start()
 
     def stop(self):
-        self._timer.stop()
         self._playing = False
-        if self._stream:
-            self._stream.abort()
-            self._stream.close()
-            self._stream = None
+        self._timer.stop()
+        stream, self._stream = self._stream, None
+        if stream:
+            try:
+                stream.abort()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
         self._position = 0
 
     def is_playing(self) -> bool:
@@ -251,9 +272,16 @@ class SingleTrackPlayer(QObject):
             raise sd.CallbackStop()
 
     def _on_finished(self):
+        from PySide6.QtCore import QMetaObject, Qt
+        QMetaObject.invokeMethod(self, '_cleanup_after_finish', Qt.QueuedConnection)
+
+    def _cleanup_after_finish(self):
         self._timer.stop()
-        if self._stream:
-            self._stream.close()
-            self._stream = None
+        stream, self._stream = self._stream, None
+        if stream:
+            try:
+                stream.close()
+            except Exception:
+                pass
         self.position_changed.emit(self.get_position_ratio())
         self.playback_stopped.emit()
