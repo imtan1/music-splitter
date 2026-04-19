@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSlider, QScrollArea, QFileDialog,
     QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QThread
 
 from core.player import AudioEngine, TrackState, SingleTrackPlayer
 from core.mixer import mix_tracks
@@ -111,6 +111,48 @@ ALL_KEYS = [
     'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm',
 ]
 
+# 調性根音半音數（分大調/小調共用根音 pitch class）
+KEY_PC: dict[str, int] = {
+    'C':0,'C#':1,'Db':1,'D':2,'Eb':3,'E':4,
+    'F':5,'F#':6,'Gb':6,'G':7,'Ab':8,'A':9,'Bb':10,'B':11,
+    'Cm':0,'Dm':2,'Em':4,'Fm':5,'Gm':7,'Am':9,'Bm':11,
+}
+
+
+class PitchShiftThread(QThread):
+    """平行處理所有音軌的音調轉換（librosa + ThreadPoolExecutor）。"""
+    finished = Signal(dict)   # {stem_name: shifted_audio_np}
+    error    = Signal(str)
+
+    def __init__(self, original_audios: dict, sr: int, n_steps: int, parent=None):
+        super().__init__(parent)
+        self._originals = original_audios   # {name: np.ndarray (samples, 2)}
+        self._sr = sr
+        self._n_steps = n_steps
+
+    def run(self):
+        try:
+            import librosa
+            from concurrent.futures import ThreadPoolExecutor
+
+            sr, n = self._sr, self._n_steps
+
+            def shift_one(item):
+                name, audio = item
+                if n == 0:
+                    return name, audio.copy()
+                left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n)
+                right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n)
+                return name, np.stack([left, right], axis=1).astype(np.float32)
+
+            n_workers = min(6, max(1, len(self._originals)))
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                result = dict(ex.map(shift_one, self._originals.items()))
+
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
 
 class ResultView(QWidget):
     back_requested = Signal()   # 回主頁
@@ -127,12 +169,22 @@ class ResultView(QWidget):
         self._metronome_channel: MetronomeChannel | None = None
         self._seek_dragging = False
         self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
+        self._base_key_pc: int | None = None       # 分源偵測調性的根音半音值
+        self._original_audios: dict = {}           # {stem_name: np.ndarray} 原始未移調音頻
+        self._pitch_shift_thread: PitchShiftThread | None = None
+        self._source_title: str = ''
 
         # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
         self._metro_rebuild_timer = QTimer(self)
         self._metro_rebuild_timer.setSingleShot(True)
         self._metro_rebuild_timer.setInterval(600)
         self._metro_rebuild_timer.timeout.connect(self._rebuild_metronome)
+
+        # 防抖計時器：調性停止變動後 800ms 才開始 pitch shift
+        self._key_shift_timer = QTimer(self)
+        self._key_shift_timer.setSingleShot(True)
+        self._key_shift_timer.setInterval(800)
+        self._key_shift_timer.timeout.connect(self._apply_pitch_shift)
 
         self._build_ui()
 
@@ -168,13 +220,20 @@ class ResultView(QWidget):
         self._tempo_spin.setValue(max(40, min(240, int(tempo))))
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
         display_key = key if key in ALL_KEYS else '自動偵測'
+        self._base_key_pc = KEY_PC.get(display_key)   # 記錄原始調性根音
+        self._key_combo.blockSignals(True)
         self._key_combo.setCurrentText(display_key)
+        self._key_combo.blockSignals(False)
+
+        self._source_title = source_name or ''
+        self._original_audios = {}   # 清除舊快取
 
         tracks = []
         file_title = os.path.splitext(source_name)[0] if source_name else ''
 
         for stem_name, (audio, sr) in results.items():
             label = STEM_LABELS.get(stem_name, stem_name)
+            self._original_audios[stem_name] = audio   # 保存原始音頻
             track = TrackState(stem_name, audio, sr)
             tracks.append(track)
 
@@ -293,7 +352,8 @@ class ResultView(QWidget):
         self._key_combo = QComboBox()
         self._key_combo.addItems(ALL_KEYS)
         self._key_combo.setFixedWidth(110)
-        self._key_combo.setToolTip("調整後開啟 MIDI 分析將套用此調性")
+        self._key_combo.setToolTip("選擇調性後所有音軌將自動移調")
+        self._key_combo.currentTextChanged.connect(self._on_key_changed)
         info_row.addWidget(self._key_combo)
 
         info_row.addStretch()
@@ -436,6 +496,76 @@ class ResultView(QWidget):
     def _on_master_volume_changed(self, value: int):
         self._engine.master_volume = value / 100.0
         self._master_vol_lbl.setText(f"{value}%")
+
+    def _on_key_changed(self, key_text: str):
+        """調性 combo 改動 → 防抖後執行 pitch shift。"""
+        if not self._tracks:
+            return
+        self._key_shift_timer.start()
+
+    def _apply_pitch_shift(self):
+        """計算半音差，對所有音軌執行 pitch shift。"""
+        new_key = self._key_combo.currentText()
+        new_pc = KEY_PC.get(new_key)
+        if new_pc is None or self._base_key_pc is None or not self._original_audios:
+            return
+
+        n_steps = int(new_pc - self._base_key_pc)
+        if n_steps > 6:
+            n_steps -= 12
+        elif n_steps < -6:
+            n_steps += 12
+
+        sr = self._tracks[0].sample_rate if self._tracks else 44100
+
+        # 停止播放，顯示進度
+        was_playing = self._engine.is_playing()
+        self._engine.pause()
+        self._play_btn.setText("▶ 整體播放")
+        sign = f"+{n_steps}" if n_steps >= 0 else str(n_steps)
+        self._title_lbl.setText(f"移調中（{sign} 個半音）...")
+        self._play_btn.setEnabled(False)
+
+        # 停掉舊執行緒
+        if self._pitch_shift_thread and self._pitch_shift_thread.isRunning():
+            self._pitch_shift_thread.quit()
+            self._pitch_shift_thread.wait(2000)
+
+        self._pitch_shift_thread = PitchShiftThread(
+            dict(self._original_audios), sr, n_steps, self
+        )
+        self._pitch_shift_thread.finished.connect(
+            lambda d: self._on_pitch_shift_done(d, was_playing)
+        )
+        self._pitch_shift_thread.error.connect(self._on_pitch_shift_error)
+        self._pitch_shift_thread.start()
+
+    def _on_pitch_shift_done(self, shifted: dict, was_playing: bool):
+        """移調完成：更新 TrackState 音頻、重載引擎、更新波形圖。"""
+        pos = self._engine.get_position_ratio()
+        for track in self._tracks:
+            if track.name in shifted:
+                track.audio = shifted[track.name]
+
+        engine_tracks = self._tracks + ([self._metronome_track] if self._metronome_track else [])
+        self._engine.load_tracks(engine_tracks)
+        self._engine.seek(pos)
+
+        for ch in self._channels:
+            ch.update_waveform()
+
+        title = f"分離完成：{self._source_title}" if self._source_title else "分離完成"
+        self._title_lbl.setText(title)
+        self._play_btn.setEnabled(True)
+
+        if was_playing:
+            self._engine.play()
+            self._play_btn.setText("⏸ 暫停")
+
+    def _on_pitch_shift_error(self, msg: str):
+        self._title_lbl.setText("移調失敗")
+        self._play_btn.setEnabled(True)
+        QMessageBox.warning(self, "移調失敗", msg)
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""

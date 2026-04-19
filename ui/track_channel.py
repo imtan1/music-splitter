@@ -119,6 +119,10 @@ class TrackChannel(QWidget):
     def set_position(self, ratio: float):
         self.waveform.set_position(ratio)
 
+    def update_waveform(self):
+        """移調後重繪波形圖（從 track.audio 重新計算 peaks）。"""
+        self.waveform._load_audio(self.track.audio)
+
     def set_solo_active(self, active: bool):
         self.waveform.set_muted(active and not self.solo_btn.isChecked())
 
