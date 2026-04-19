@@ -19,8 +19,7 @@ STEM_LABELS = {
 
 def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
     """
-    從原始音頻快速偵測 BPM。
-    調性偵測交由 transcriber._detect_key 在音高分析後處理（更準確）。
+    從原始音頻快速偵測 BPM 與調性（純 numpy，無 librosa）。
     wav_np: shape (channels, samples)，float32
     回傳 (tempo_bpm, key_name)
     """
@@ -28,7 +27,59 @@ def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
 
     mono = wav_np.mean(axis=0).astype(np.float32)
     tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
-    return tempo, '自動偵測'
+    key = _detect_key_chromagram(mono, sr)
+    return tempo, key
+
+
+def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
+    """
+    FFT chromagram + Krumhansl-Schmuckler 演算法偵測調性，純 numpy。
+    只回傳 ALL_KEYS 中存在的調性名稱。
+    """
+    # Krumhansl-Schmuckler 音調輪廓
+    major_p = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
+    minor_p = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
+
+    # 前 30 秒即可
+    audio = mono[:sr * 30].astype(np.float32)
+    win = 4096
+    hop = 2048
+    window = np.hanning(win).astype(np.float32)
+
+    freqs = np.fft.rfftfreq(win, 1.0 / sr)
+    valid = (freqs >= 65.0) & (freqs <= 2093.0)
+    valid_freqs = freqs[valid]
+    midi_f = 12.0 * np.log2(np.maximum(valid_freqs, 1e-9) / 440.0) + 69.0
+    pc = np.round(midi_f).astype(int) % 12   # pitch class index per bin
+
+    chroma = np.zeros(12, dtype=np.float64)
+    n_frames = max(1, (len(audio) - win) // hop)
+    for i in range(n_frames):
+        frame = audio[i * hop: i * hop + win]
+        if len(frame) < win:
+            break
+        spectrum = np.abs(np.fft.rfft(frame * window))[valid]
+        np.add.at(chroma, pc, spectrum)
+
+    if chroma.sum() > 0:
+        chroma /= chroma.sum()
+
+    # 大調：12 個根音，對應 ALL_KEYS 的標記法
+    major_names = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B']
+    # 小調：只取 ALL_KEYS 中有的 7 個自然音小調（根音索引）
+    minor_roots = {0:'Cm', 2:'Dm', 4:'Em', 5:'Fm', 7:'Gm', 9:'Am', 11:'Bm'}
+
+    best_score, best_key = -np.inf, 'C'
+    for root in range(12):
+        maj = float(np.corrcoef(chroma, np.roll(major_p, root))[0, 1])
+        if maj > best_score:
+            best_score, best_key = maj, major_names[root]
+        if root in minor_roots:
+            mn = float(np.corrcoef(chroma, np.roll(minor_p, root))[0, 1])
+            if mn > best_score:
+                best_score, best_key = mn, minor_roots[root]
+
+    return best_key
 
 
 class SeparatorThread(QThread):
