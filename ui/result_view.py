@@ -271,7 +271,8 @@ class ResultView(QWidget):
             engine_tracks = tracks
 
         self._engine.load_tracks(engine_tracks)
-        self._engine.set_speed(1.0)   # 重設速度為原速
+        self._engine.set_speed(1.0)
+        self._engine.set_key_factor(1.0)
 
         title = f"分離完成：{source_name}" if source_name else "分離完成"
         self._title_lbl.setText(title)
@@ -504,10 +505,11 @@ class ResultView(QWidget):
         self._key_shift_timer.start()
 
     def _apply_pitch_shift(self):
-        """計算半音差，對所有音軌執行 pitch shift。"""
+        """計算半音差，透過調整 output samplerate 即時移調（毫秒級）。"""
         new_key = self._key_combo.currentText()
         new_pc = KEY_PC.get(new_key)
-        if new_pc is None or self._base_key_pc is None or not self._original_audios:
+        if new_pc is None or self._base_key_pc is None:
+            self._engine.set_key_factor(1.0)
             return
 
         n_steps = int(new_pc - self._base_key_pc)
@@ -516,56 +518,8 @@ class ResultView(QWidget):
         elif n_steps < -6:
             n_steps += 12
 
-        sr = self._tracks[0].sample_rate if self._tracks else 44100
-
-        # 停止播放，顯示進度
-        was_playing = self._engine.is_playing()
-        self._engine.pause()
-        self._play_btn.setText("▶ 整體播放")
-        sign = f"+{n_steps}" if n_steps >= 0 else str(n_steps)
-        self._title_lbl.setText(f"移調中（{sign} 個半音）...")
-        self._play_btn.setEnabled(False)
-
-        # 停掉舊執行緒
-        if self._pitch_shift_thread and self._pitch_shift_thread.isRunning():
-            self._pitch_shift_thread.quit()
-            self._pitch_shift_thread.wait(2000)
-
-        self._pitch_shift_thread = PitchShiftThread(
-            dict(self._original_audios), sr, n_steps, self
-        )
-        self._pitch_shift_thread.finished.connect(
-            lambda d: self._on_pitch_shift_done(d, was_playing)
-        )
-        self._pitch_shift_thread.error.connect(self._on_pitch_shift_error)
-        self._pitch_shift_thread.start()
-
-    def _on_pitch_shift_done(self, shifted: dict, was_playing: bool):
-        """移調完成：更新 TrackState 音頻、重載引擎、更新波形圖。"""
-        pos = self._engine.get_position_ratio()
-        for track in self._tracks:
-            if track.name in shifted:
-                track.audio = shifted[track.name]
-
-        engine_tracks = self._tracks + ([self._metronome_track] if self._metronome_track else [])
-        self._engine.load_tracks(engine_tracks)
-        self._engine.seek(pos)
-
-        for ch in self._channels:
-            ch.update_waveform()
-
-        title = f"分離完成：{self._source_title}" if self._source_title else "分離完成"
-        self._title_lbl.setText(title)
-        self._play_btn.setEnabled(True)
-
-        if was_playing:
-            self._engine.play()
-            self._play_btn.setText("⏸ 暫停")
-
-    def _on_pitch_shift_error(self, msg: str):
-        self._title_lbl.setText("移調失敗")
-        self._play_btn.setEnabled(True)
-        QMessageBox.warning(self, "移調失敗", msg)
+        key_factor = 2.0 ** (n_steps / 12.0)
+        self._engine.set_key_factor(key_factor)
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
