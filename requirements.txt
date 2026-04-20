@@ -12,4 +12,5 @@ matplotlib>=3.7.0
 music21>=9.0.0
 verovio>=3.14.0
 praat-parselmouth>=0.4.0
-basic-pitch>=0.3.0
+basic-pitch[onnx]>=0.4.0
+onnxruntime>=1.14.0
