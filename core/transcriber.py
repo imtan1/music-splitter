@@ -382,12 +382,15 @@ def _midi_to_num(midi: int, root_pc: int, scale: list):
 def _detect_pitch_numpy(mono: np.ndarray, sr: int, beat_dur: float,
                         fmin: float = 65.0, fmax: float = 2093.0) -> list:
     """
-    純 numpy HPS（Harmonic Product Spectrum）音高偵測，無需任何 ML 套件。
-    比 librosa.yin 快 5–10x，精度略低但足夠簡譜使用。
+    FFT 自相關音高偵測（YIN 核心原理），純 numpy，無 ML 依賴。
+    比 HPS 準確（不會抓到泛音），速度同樣快。
     """
     HOP = 512
     FRAME = 2048
     WIN = np.hanning(FRAME).astype(np.float32)
+
+    tau_min = max(1, int(sr / fmax))   # 最短周期（最高音）
+    tau_max = min(FRAME // 2 - 1, int(sr / fmin))  # 最長周期（最低音）
 
     n_frames = max(0, (len(mono) - FRAME) // HOP)
     if n_frames == 0:
@@ -397,28 +400,24 @@ def _detect_pitch_numpy(mono: np.ndarray, sr: int, beat_dur: float,
     idx = np.arange(n_frames)[:, None] * HOP + np.arange(FRAME)
     frames = mono[idx] * WIN  # (n_frames, FRAME)
 
-    # FFT magnitude
-    spec = np.abs(np.fft.rfft(frames, axis=1)).astype(np.float32)  # (n_frames, FRAME//2+1)
-    freqs = np.fft.rfftfreq(FRAME, 1.0 / sr).astype(np.float32)
+    # FFT 自相關（比直接 correlate 快 O(n log n)）
+    spec = np.fft.rfft(frames, n=FRAME * 2, axis=1)
+    acf = np.fft.irfft(spec * np.conj(spec), axis=1)[:, :FRAME].real
 
-    lo = int(np.searchsorted(freqs, fmin))
-    hi = int(np.searchsorted(freqs, fmax))
+    # 正規化，讓 ACF 範圍在 [-1, 1]
+    norm = acf[:, 0:1]
+    acf_n = np.where(norm > 1e-8, acf / (norm + 1e-8), 0.0)
 
-    # HPS：累乘降採樣頻譜，強化基音
-    hps = spec[:, lo:hi].copy()
-    for h in range(2, 5):
-        src = spec[:, lo * h: hi * h: h]
-        L = min(hps.shape[1], src.shape[1])
-        hps[:, :L] *= src[:, :L]
+    # 在有效 lag 範圍取峰值
+    peak_lag = np.argmax(acf_n[:, tau_min:tau_max], axis=1) + tau_min
+    f0 = (sr / peak_lag).astype(np.float32)
 
-    peak_rel = np.argmax(hps, axis=1)
-    f0 = freqs[peak_rel + lo]
-
-    # voiced：RMS 超過門檻且 HPS 峰值突出
+    # Voiced 判斷：ACF 峰值強度 + RMS 門檻
+    peak_strength = acf_n[np.arange(n_frames), peak_lag]
     rms = np.sqrt(np.mean(frames ** 2, axis=1))
-    voiced = rms > (rms.max() * 0.05 + 1e-8)
-    f0 = np.where(voiced, f0, 0.0)
+    rms_thresh = max(rms.max() * 0.02, 1e-6)
+    voiced = (peak_strength > 0.25) & (rms > rms_thresh)
 
-    times = (idx[:, 0] / sr).astype(np.float64)
-    voiced_bool = voiced & (f0 > 0)
-    return _segment_notes(f0, voiced_bool, times, beat_dur)
+    f0_out = np.where(voiced, f0, 0.0)
+    times = (np.arange(n_frames) * HOP / sr).astype(np.float64)
+    return _segment_notes(f0_out, voiced & (f0_out > 0), times, beat_dur)
