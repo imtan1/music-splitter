@@ -412,11 +412,12 @@ def _detect_pitch_numpy(mono: np.ndarray, sr: int, beat_dur: float,
     peak_lag = np.argmax(acf_n[:, tau_min:tau_max], axis=1) + tau_min
     f0 = (sr / peak_lag).astype(np.float32)
 
-    # Voiced 判斷：ACF 峰值強度 + RMS 門檻
+    # Voiced 判斷：ACF 峰值強度 + RMS 雙重門檻
+    # rms_thresh：相對（12% 最大值）與絕對（0.01）取較大，過濾 demucs 殘留雜訊
     peak_strength = acf_n[np.arange(n_frames), peak_lag]
     rms = np.sqrt(np.mean(frames ** 2, axis=1))
-    rms_thresh = max(rms.max() * 0.02, 1e-6)
-    voiced = (peak_strength > 0.25) & (rms > rms_thresh)
+    rms_thresh = max(rms.max() * 0.12, 0.01)
+    voiced = (peak_strength > 0.5) & (rms > rms_thresh)
 
     f0_out = np.where(voiced, f0, 0.0)
     times = (np.arange(n_frames) * HOP / sr).astype(np.float64)
