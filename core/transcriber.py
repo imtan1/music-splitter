@@ -95,12 +95,9 @@ class TranscriberThread(QThread):
             beat_dur = 60.0 / tempo
             print(f"[MIDI] BPM={tempo:.1f}", flush=True, file=sys.stderr)
 
-            # 純 numpy HPS 音高偵測（無需 TensorFlow / librosa，速度快）
+            # 純 numpy FFT 自相關音高偵測（無需 TensorFlow / librosa）
             ANALYSIS_SR2 = 22050
-            MAX_SECONDS = 60
-            mono_np = mono[:sr * MAX_SECONDS] if len(mono) > sr * MAX_SECONDS else mono
-            if sr != ANALYSIS_SR2:
-                mono_np = mono_np[::2] if sr == 44100 else mono_np
+            mono_np = mono[::2] if sr == 44100 else mono
             np_sec = len(mono_np) / ANALYSIS_SR2
             print(f"[MIDI] HPS 輸入: {np_sec:.1f}s @ {ANALYSIS_SR2}Hz", flush=True, file=sys.stderr)
 
