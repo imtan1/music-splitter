@@ -252,8 +252,17 @@ class MidiView(QDialog):
             self._start_play_from(ratio)
 
     def _presynthesize(self):
+        import numpy as np
         from core.midi_synth import synthesize
         audio = synthesize(self._jianpu_notes, self._auto_tempo, self._auto_key)
+
+        # 補 padding 讓 MIDI 時間軸與原始音軌對齊，波形進度才會同步
+        orig_dur = len(self.track.audio) / self.track.sample_rate
+        synth_dur = len(audio) / 44100
+        if synth_dur < orig_dur:
+            pad = int((orig_dur - synth_dur) * 44100)
+            audio = np.concatenate([audio, np.zeros(pad, dtype=np.float32)])
+
         self._synth_audio = audio  # GIL 保證賦值原子性
 
     def _toggle_play(self):
