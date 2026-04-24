@@ -141,39 +141,48 @@ def convert_raw_to_jianpu(raw_notes: list, key: str, beat_dur: float) -> list:
 
 def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> float:
     """
-    用 RMS envelope FFT 自相關法快速估 BPM，完全向量化無 Python loop。
-    輸入最多 10 秒的 mono 音頻。若偵測失敗則回傳 default。
+    低頻 RMS flux + Fourier tempogram 估 BPM。
+    低通 300Hz 後分析，避免人聲/旋律干擾節拍偵測。
     """
-    HOP = 256
-    n_hops = (len(mono) - HOP) // HOP
-    if n_hops < 4:
+    from scipy.signal import butter, filtfilt, find_peaks
+
+    # 低通 300Hz 保留鼓/低頻節拍
+    try:
+        b, a = butter(4, min(300.0 / (sr / 2), 0.99), btype='low')
+        low = filtfilt(b, a, mono).astype(np.float32)
+    except Exception:
+        low = mono
+
+    HOP = 512
+    n = len(low) // HOP
+    if n < 8:
         return default
 
-    # 向量化 RMS：reshape 後一次計算
-    frames = mono[:n_hops * HOP].reshape(n_hops, HOP)
-    rms = np.sqrt(np.mean(frames ** 2, axis=1)).astype(np.float32)
-    rms -= rms.mean()
-    if rms.std() < 1e-6:
+    frames = low[:n * HOP].reshape(n, HOP)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    flux = np.maximum(np.diff(rms), 0).astype(np.float32)
+    if flux.std() < 1e-8:
         return default
 
-    # FFT 自相關，O(n log n) 不用 np.correlate O(n²)
-    n = len(rms)
-    f = np.fft.rfft(rms, n=2 * n)
-    corr = np.fft.irfft(f * np.conj(f))[:n].real
-
-    # 搜尋範圍：40–200 BPM
-    lo = max(1, int(60.0 / 200 * sr / HOP))
-    hi = min(n - 1, int(60.0 / 40 * sr / HOP))
-    if lo >= hi:
+    onset_sr = sr / HOP
+    F = np.abs(np.fft.rfft(flux, n=len(flux) * 8))
+    bpm_arr = np.fft.rfftfreq(len(flux) * 8, d=1.0 / onset_sr) * 60.0
+    mask = (bpm_arr >= 40) & (bpm_arr <= 180)
+    F_m, b_m = F[mask], bpm_arr[mask]
+    if len(F_m) == 0:
         return default
 
-    peak = int(np.argmax(corr[lo:hi])) + lo
-    beat_period = peak * HOP / sr
-    tempo = 60.0 / beat_period if beat_period > 0 else default
+    peaks, props = find_peaks(F_m, height=F_m.max() * 0.25)
+    if len(peaks) == 0:
+        peaks = [int(np.argmax(F_m))]
+        props = {'peak_heights': np.array([F_m[peaks[0]]])}
 
-    if tempo < 50 or tempo > 220:
-        return default
-    return float(tempo)
+    candidates = sorted(zip(F_m[peaks], b_m[peaks]), reverse=True)
+    for _, b in candidates:
+        b = b / 2 if b > 140 else b
+        if 50 <= b <= 160:
+            return float(b)
+    return default
 
 
 def _segment_notes(f0, voiced, times, beat_dur):
