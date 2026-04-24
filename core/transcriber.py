@@ -421,4 +421,10 @@ def _detect_pitch_numpy(mono: np.ndarray, sr: int, beat_dur: float,
 
     f0_out = np.where(voiced, f0, 0.0)
     times = (np.arange(n_frames) * HOP / sr).astype(np.float64)
-    return _segment_notes(f0_out, voiced & (f0_out > 0), times, beat_dur)
+    raw = _segment_notes(f0_out, voiced & (f0_out > 0), times, beat_dur)
+
+    # _segment_notes 只處理 voiced 段之間的靜音，開頭靜音需手動補
+    if raw and raw[0]['start'] > beat_dur * 0.25:
+        raw.insert(0, {'midi': None, 'start': 0.0, 'dur': raw[0]['start']})
+
+    return raw
