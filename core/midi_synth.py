@@ -12,6 +12,47 @@ def jianpu_to_midi_pitch(jn: JianpuNote, root_pc: int, scale: list) -> int:
     return ref_tonic + scale[degree] + jn.octave * 12
 
 
+def synthesize_from_raw(raw_notes: list, total_dur_sec: float, sr: int = 44100) -> np.ndarray:
+    """
+    用 raw_notes（含 start 秒數）合成音頻，每個音符放在正確時間位置。
+    不會有累積偏差，MIDI 時間軸與原始音軌完全對齊。
+    """
+    total_samples = int(total_dur_sec * sr)
+    audio = np.zeros(total_samples, dtype=np.float32)
+
+    for note in raw_notes:
+        if note['midi'] is None:
+            continue
+        start_sample = int(note['start'] * sr)
+        if start_sample >= total_samples:
+            break
+
+        freq = 440.0 * 2.0 ** ((note['midi'] - 69) / 12.0)
+        dur_sec = note['dur']
+        n_samples = min(int(dur_sec * sr), total_samples - start_sample)
+        if n_samples <= 0:
+            continue
+
+        t = np.linspace(0, dur_sec, n_samples, endpoint=False, dtype=np.float32)
+        phase = freq * t
+        wave = (2.0 * np.abs(2.0 * (phase - np.floor(phase + 0.5))) - 1.0) * 0.22
+
+        env = np.ones(n_samples, dtype=np.float32)
+        attack = min(int(0.015 * sr), n_samples // 4)
+        release = min(int(0.30 * dur_sec * sr), n_samples // 2)
+        if attack > 0:
+            env[:attack] = np.linspace(0.0, 1.0, attack, dtype=np.float32)
+        if release > 0:
+            env[-release:] = np.linspace(1.0, 0.0, release, dtype=np.float32)
+
+        audio[start_sample:start_sample + n_samples] += wave * env
+
+    peak = np.max(np.abs(audio))
+    if peak > 0:
+        audio /= peak / 0.80
+    return audio
+
+
 def synthesize(notes: list, tempo: float, key_name: str, sr: int = 44100) -> np.ndarray:
     """
     將 JianpuNote 列表合成為 float32 mono 音頻陣列。
