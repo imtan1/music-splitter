@@ -91,7 +91,7 @@ class TranscriberThread(QThread):
             if self.initial_tempo > 0:
                 tempo = self.initial_tempo
             else:
-                tempo = _estimate_tempo_fast(mono_ds[:ANALYSIS_SR * 10], ANALYSIS_SR)
+                tempo = _estimate_tempo_fast(mono_ds, ANALYSIS_SR)
             beat_dur = 60.0 / tempo
             print(f"[MIDI] BPM={tempo:.1f}", flush=True, file=sys.stderr)
 

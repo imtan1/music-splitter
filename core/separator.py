@@ -26,7 +26,7 @@ def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
     from core.transcriber import _estimate_tempo_fast
 
     mono = wav_np.mean(axis=0).astype(np.float32)
-    tempo = _estimate_tempo_fast(mono[:sr * 10], sr)
+    tempo = _estimate_tempo_fast(mono, sr)
     key = _detect_key_chromagram(mono, sr)
     return tempo, key
 
