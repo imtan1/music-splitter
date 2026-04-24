@@ -113,7 +113,8 @@ class TranscriberThread(QThread):
                 key = self.initial_key
             else:
                 self.progress.emit("偵測調性...", 80)
-                key = _detect_key(raw)
+                from core.separator import _detect_key_chromagram
+                key = _detect_key_chromagram(mono_np, ANALYSIS_SR2)
 
             self.progress.emit("節奏量化中（music21）...", 85)
             notes = _to_jianpu_music21(raw, key, beat_dur)
