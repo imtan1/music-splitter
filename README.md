@@ -98,14 +98,15 @@ python main.py
 
 | 功能 | 說明 |
 |------|------|
-| 音高分析 | 使用 **parselmouth**（Praat）偵測音高，music21 量化節奏 |
+| 音高分析 | 純 numpy FFT 自相關法偵測音高（monophonic），music21 量化節奏 |
 | 波形顯示 | 分析完成後顯示人聲音軌波形；可點擊或拖曳跳轉 MIDI 播放位置 |
-| ▶ 播放 MIDI | 播放由分析結果合成的 MIDI 音頻（三角波合成）；合成於背景預先完成，按鍵即時響應 |
+| ▶ 播放 MIDI | 播放由分析結果合成的 MIDI 音頻（三角波合成）；音符依原始時間軸對齊，不會有累積偏差 |
 | 📜 五線譜 | 在瀏覽器開啟五線譜（verovio 渲染 SVG） |
 | ♩ 簡譜 | 在瀏覽器開啟簡譜（matplotlib 渲染 PNG） |
 | 調性 / 速度 | 分析完成後顯示於右上角 chip；沿用 Mixer 偵測結果，如需調整請返回 Mixer |
+| 音量 | MIDI 播放音量可獨立調整（0–150%） |
 
-> 分析過程：沿用 Mixer 的 BPM/調性 → parselmouth 音高分析 → 音符分割 → music21 節奏量化
+> 分析過程：沿用 Mixer 的 BPM/調性 → FFT 自相關音高偵測 → 音符分割 → music21 節奏量化
 
 ---
 
@@ -149,7 +150,7 @@ music-splitter/
 │   ├── player.py            # 多軌同步播放引擎
 │   ├── mixer.py             # 混音邏輯
 │   ├── exporter.py          # MP3 匯出
-│   ├── transcriber.py       # 音高偵測 + music21 節奏量化 → JianpuNote
+│   ├── transcriber.py       # FFT 自相關音高偵測 + music21 節奏量化 → JianpuNote
 │   ├── jianpu_renderer.py   # 簡譜渲染（matplotlib）
 │   ├── staff_renderer.py    # 五線譜渲染（music21 + verovio → SVG）
 │   ├── midi_synth.py        # MIDI 合成（三角波）
