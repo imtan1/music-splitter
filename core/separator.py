@@ -33,21 +33,29 @@ def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
 
 def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
     """
-    FFT chromagram + Krumhansl-Schmuckler 演算法偵測調性，純 numpy。
+    Bass-weighted FFT chromagram + Krumhansl-Schmuckler 演算法偵測調性，純 numpy。
+    低頻 40–500Hz 分析，bass 根音更能代表調性。
     只回傳 ALL_KEYS 中存在的調性名稱。
     """
+    from scipy.signal import butter, filtfilt
+
     # Krumhansl-Schmuckler 音調輪廓
     major_p = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
     minor_p = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
 
-    # 前 30 秒即可
-    audio = mono[:sr * 30].astype(np.float32)
-    win = 4096
-    hop = 2048
+    audio = mono.astype(np.float32)
+
+    # 低通 500Hz — bass 根音主導調性
+    nyq = sr / 2
+    b, a = butter(4, min(500.0 / nyq, 0.99), btype='low')
+    audio = filtfilt(b, a, audio).astype(np.float32)
+
+    win = 8192   # 更長視窗讓低頻解析度更高
+    hop = 4096
     window = np.hanning(win).astype(np.float32)
 
     freqs = np.fft.rfftfreq(win, 1.0 / sr)
-    valid = (freqs >= 65.0) & (freqs <= 2093.0)
+    valid = (freqs >= 40.0) & (freqs <= 500.0)
     valid_freqs = freqs[valid]
     midi_f = 12.0 * np.log2(np.maximum(valid_freqs, 1e-9) / 440.0) + 69.0
     pc = np.round(midi_f).astype(int) % 12   # pitch class index per bin

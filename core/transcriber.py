@@ -179,7 +179,10 @@ def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> f
 
     candidates = sorted(zip(F_m[peaks], b_m[peaks]), reverse=True)
     for _, b in candidates:
-        b = b / 2 if b > 140 else b
+        if b > 140:
+            b = b / 2
+        elif b < 60:
+            b = b * 2
         if 50 <= b <= 160:
             return float(b)
     return default
