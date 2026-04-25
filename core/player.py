@@ -41,7 +41,7 @@ class AudioEngine(QObject):
         self._playing = False
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
-        self._key_factor = 1.0     # 調性移調倍率，1.0 = 原調（2^(n/12)）
+        self._pitch_board = None    # pedalboard.Pedalboard | None，即時移調
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -80,14 +80,13 @@ class AudioEngine(QObject):
             self._position = pos
             self.play()
 
-    def set_key_factor(self, factor: float):
-        """設定移調倍率 2^(n_steps/12)。即時生效，不需重算音頻。"""
-        self._key_factor = max(0.25, min(4.0, factor))
-        if self._playing:
-            pos = self._position
-            self.pause()
-            self._position = pos
-            self.play()
+    def set_pitch_semitones(self, n: int):
+        """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
+        import pedalboard
+        if n == 0:
+            self._pitch_board = None
+        else:
+            self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
 
     def get_position_ratio(self) -> float:
         if self._length == 0:
@@ -166,6 +165,13 @@ class AudioEngine(QObject):
 
         mixed *= self._master_volume
         np.clip(mixed, -1.0, 1.0, out=mixed)
+
+        board = self._pitch_board
+        if board is not None:
+            # (frames, 2) → (2, frames) → pedalboard → (2, frames) → (frames, 2)
+            mixed = board(mixed.T, self.sample_rate).T[:frames]
+            np.clip(mixed, -1.0, 1.0, out=mixed)
+
         outdata[:] = mixed
         self._position += frames
 

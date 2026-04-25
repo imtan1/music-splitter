@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSlider, QScrollArea, QFileDialog,
     QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QThread
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from core.player import AudioEngine, TrackState, SingleTrackPlayer
 from core.mixer import mix_tracks
@@ -130,50 +130,6 @@ KEY_PC: dict[str, int] = {
 }
 
 
-class PitchShiftThread(QThread):
-    """逐軌移調（Spotify pedalboard PitchShift），單執行緒循序執行避免 CPU 飽和造成 UI 假死。"""
-    finished = Signal(dict)   # {stem_name: shifted_audio_np}
-    error    = Signal(str)
-
-    def __init__(self, original_audios: dict, sr: int, n_steps: int, parent=None):
-        super().__init__(parent)
-        self._originals = original_audios   # {name: np.ndarray (samples, 2)}
-        self._sr = sr
-        self._n_steps = n_steps
-
-    def run(self):
-        try:
-            import pedalboard, time
-            sr, n = self._sr, self._n_steps
-            total = len(self._originals)
-            print(f"[PitchShift] 開始移調 {n:+d} 半音，共 {total} 軌", flush=True)
-            board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
-            result = {}
-            for i, (name, audio) in enumerate(self._originals.items(), 1):
-                if self.isInterruptionRequested():
-                    print(f"[PitchShift] 中止（第 {i}/{total} 軌前）", flush=True)
-                    return
-                t0 = time.time()
-                # 幾乎靜音的軌直接跳過（如未使用的 piano/guitar）
-                rms = float(np.sqrt(np.mean(audio ** 2)))
-                if rms < 1e-4:
-                    result[name] = audio.copy()
-                    print(f"[PitchShift] ({i}/{total}) {name} 靜音跳過 (rms={rms:.2e})", flush=True)
-                    continue
-                print(f"[PitchShift] ({i}/{total}) 處理 {name}（rms={rms:.4f}）...", flush=True)
-                if n == 0:
-                    result[name] = audio.copy()
-                else:
-                    # pedalboard 接受 (channels, samples) float32，回傳同形狀
-                    shifted = board(audio.T.astype(np.float32), sr)
-                    result[name] = shifted.T.astype(np.float32)
-                print(f"[PitchShift] ({i}/{total}) {name} 完成，耗時 {time.time()-t0:.1f}s", flush=True)
-            print(f"[PitchShift] 全部完成，emit finished", flush=True)
-            self.finished.emit(result)
-        except Exception as e:
-            print(f"[PitchShift] 錯誤: {e}", flush=True)
-            self.error.emit(str(e))
-
 
 class ResultView(QWidget):
     back_requested = Signal()   # 回主頁
@@ -191,8 +147,6 @@ class ResultView(QWidget):
         self._seek_dragging = False
         self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
         self._base_key_pc: int | None = None       # 分源偵測調性的根音半音值
-        self._original_audios: dict = {}           # {stem_name: np.ndarray} 原始未移調音頻
-        self._pitch_shift_thread: PitchShiftThread | None = None
         self._source_title: str = ''
 
         # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
@@ -200,12 +154,6 @@ class ResultView(QWidget):
         self._metro_rebuild_timer.setSingleShot(True)
         self._metro_rebuild_timer.setInterval(600)
         self._metro_rebuild_timer.timeout.connect(self._rebuild_metronome)
-
-        # 防抖計時器：調性停止變動後 800ms 才開始 pitch shift
-        self._key_shift_timer = QTimer(self)
-        self._key_shift_timer.setSingleShot(True)
-        self._key_shift_timer.setInterval(800)
-        self._key_shift_timer.timeout.connect(self._apply_pitch_shift)
 
         self._build_ui()
 
@@ -247,14 +195,12 @@ class ResultView(QWidget):
         self._key_combo.blockSignals(False)
 
         self._source_title = source_name or ''
-        self._original_audios = {}   # 清除舊快取
 
         tracks = []
         file_title = os.path.splitext(source_name)[0] if source_name else ''
 
         for stem_name, (audio, sr) in results.items():
             label = STEM_LABELS.get(stem_name, stem_name)
-            self._original_audios[stem_name] = audio   # 保存原始音頻
             track = TrackState(stem_name, audio, sr)
             tracks.append(track)
 
@@ -294,7 +240,7 @@ class ResultView(QWidget):
 
         self._engine.load_tracks(engine_tracks)
         self._engine.set_speed(1.0)
-        self._engine.set_key_factor(1.0)
+        self._engine.set_pitch_semitones(0)
 
         title = f"分離完成：{source_name}" if source_name else "分離完成"
         self._title_lbl.setText(title)
@@ -521,14 +467,14 @@ class ResultView(QWidget):
         self._master_vol_lbl.setText(f"{value}%")
 
     def _on_key_changed(self, key_text: str):
-        """調性 combo 改動 → 防抖後執行 pitch shift。"""
+        """調性 combo 改動 → 即時套用移調（pedalboard 在 callback 裡處理，無需等待）。"""
         if not self._tracks:
             return
-        self._key_shift_timer.start()
+        self._apply_pitch_shift()
 
     def _apply_pitch_shift(self):
-        """計算半音差，用 Spotify pedalboard PitchShift 移調（時間保留，不改變播放速度）。"""
-        if not self._tracks or not self._original_audios:
+        """計算半音差並告知 engine，callback 內即時套用 pedalboard PitchShift。"""
+        if not self._tracks:
             return
         new_key = self._key_combo.currentText()
         new_pc = KEY_PC.get(new_key)
@@ -541,39 +487,7 @@ class ResultView(QWidget):
         elif n_steps < -6:
             n_steps += 12
 
-        # 若舊執行緒仍在跑，通知它中止（不阻塞等待）並斷開舊 signal
-        if self._pitch_shift_thread is not None and self._pitch_shift_thread.isRunning():
-            print("[PitchShift] 舊執行緒仍在跑，發出中止請求", flush=True)
-            self._pitch_shift_thread.requestInterruption()
-            try:
-                self._pitch_shift_thread.finished.disconnect()
-            except RuntimeError:
-                pass
-
-        # 鎖住 combo，防止重複觸發
-        print(f"[PitchShift] 鎖住調性選單，啟動執行緒（{n_steps:+d} 半音）", flush=True)
-        self._key_combo.setEnabled(False)
-
-        sr = self._tracks[0].sample_rate
-        self._pitch_shift_thread = PitchShiftThread(self._original_audios, sr, n_steps, self)
-        self._pitch_shift_thread.finished.connect(self._on_pitch_shift_done)
-        self._pitch_shift_thread.error.connect(lambda e: (
-            print(f"[PitchShift] 執行緒錯誤: {e}", flush=True),
-            self._key_combo.setEnabled(True)
-        ))
-        self._pitch_shift_thread.start()
-        print(f"[PitchShift] 執行緒已啟動，isRunning={self._pitch_shift_thread.isRunning()}", flush=True)
-
-    def _on_pitch_shift_done(self, shifted: dict):
-        """移調完成：直接替換 TrackState.audio，解鎖 combo，不中斷播放。"""
-        print(f"[PitchShift] _on_pitch_shift_done 收到 {len(shifted)} 軌，解鎖選單", flush=True)
-        track_map = {t.name: t for t in self._tracks}
-        for name, audio in shifted.items():
-            if name in track_map:
-                track_map[name].audio = audio
-                print(f"[PitchShift] 更新 TrackState: {name}", flush=True)
-        self._key_combo.setEnabled(True)
-        print("[PitchShift] 選單已解鎖", flush=True)
+        self._engine.set_pitch_semitones(n_steps)
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
