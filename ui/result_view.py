@@ -14,40 +14,36 @@ from core.separator import STEM_LABELS
 from ui.track_channel import TrackChannel
 
 def _generate_metronome(total_samples: int, sample_rate: int, bpm: float) -> np.ndarray:
-    """產生節拍器音頻陣列，強拍較高音，弱拍較低音。"""
+    """產生節拍器音頻陣列，單一點擊音。"""
     audio = np.zeros((total_samples, 2), dtype=np.float32)
     beat_samples = max(1, int(round(sample_rate * 60.0 / bpm)))
     click_dur = int(sample_rate * 0.022)   # 22ms 短促點擊
 
     t = np.arange(click_dur, dtype=np.float32) / sample_rate
-    decay = 180.0
+    click = (np.sin(2 * np.pi * 1000.0 * t) * np.exp(-180.0 * t)).astype(np.float32)
 
-    # 強拍（每小節第 1 拍）：較高音
-    down_click = (np.sin(2 * np.pi * 1400.0 * t) * np.exp(-decay * t)).astype(np.float32)
-    # 弱拍
-    weak_click = (np.sin(2 * np.pi * 880.0  * t) * np.exp(-decay * t)).astype(np.float32)
-
-    pos, beat_num = 0, 0
+    pos = 0
     while pos < total_samples:
-        click = down_click if beat_num % 4 == 0 else weak_click
         end = min(pos + click_dur, total_samples)
         chunk = click[:end - pos]
         audio[pos:end, 0] += chunk
         audio[pos:end, 1] += chunk
         pos += beat_samples
-        beat_num += 1
 
     np.clip(audio, -1.0, 1.0, out=audio)
     return audio
 
 
 class MetronomeChannel(QWidget):
-    """節拍器控制列：開關 + 音量。"""
+    """節拍器控制列：開關 + 速度倍率 + 音量。"""
+
+    speed_changed = Signal()
 
     def __init__(self, track: TrackState, parent=None):
         super().__init__(parent)
         self.track = track
         self.track.muted = True          # 預設關閉
+        self.multiplier = 1.0            # 速度倍率，預設 1x
         self.setObjectName("TrackChannel")
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -72,6 +68,19 @@ class MetronomeChannel(QWidget):
         self._toggle_btn.toggled.connect(self._on_toggle)
         row.addWidget(self._toggle_btn)
 
+        # 速度倍率按鈕 0.5x / 1x / 2x
+        self._speed_btns: dict[float, QPushButton] = {}
+        for label, mult in [("0.5x", 0.5), ("1x", 1.0), ("2x", 2.0)]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(mult == 1.0)
+            btn.setObjectName("SpeedBtn")
+            btn.setFixedWidth(40)
+            btn.clicked.connect(lambda _, m=mult: self._on_speed(m))
+            self._speed_btns[mult] = btn
+            row.addWidget(btn)
+
+        row.addSpacing(8)
         row.addWidget(QLabel("音量："))
 
         self._vol_slider = QSlider(Qt.Horizontal)
@@ -88,16 +97,18 @@ class MetronomeChannel(QWidget):
 
         row.addStretch()
 
-        hint = QLabel("速度由上方 BPM 控制")
-        hint.setObjectName("SmallLabel")
-        row.addWidget(hint)
-
         # 套用初始音量
         self.track.volume = 0.80
 
     def _on_toggle(self, checked: bool):
         self.track.muted = not checked
         self._toggle_btn.setText("關閉" if checked else "開啟")
+
+    def _on_speed(self, mult: float):
+        self.multiplier = mult
+        for m, btn in self._speed_btns.items():
+            btn.setChecked(m == mult)
+        self.speed_changed.emit()
 
     def _on_volume(self, value: int):
         self.track.volume = value / 100.0
@@ -262,6 +273,7 @@ class ResultView(QWidget):
             if self._metronome_channel is not None:
                 self._metronome_channel.deleteLater()
             self._metronome_channel = MetronomeChannel(self._metronome_track, self)
+            self._metronome_channel.speed_changed.connect(self._rebuild_metronome)
             self._channels_layout.insertWidget(
                 self._channels_layout.count() - 1, self._metronome_channel
             )
@@ -529,13 +541,15 @@ class ResultView(QWidget):
         self._metro_rebuild_timer.start()
 
     def _rebuild_metronome(self):
-        """重建節拍器音軌（BPM 變動後觸發）。"""
+        """重建節拍器音軌（BPM 或速度倍率變動後觸發）。"""
         if not self._tracks or self._metronome_track is None:
             return
         was_playing = self._engine.is_playing()
         self._engine.pause()
 
         tempo = float(self._tempo_spin.value())
+        if self._metronome_channel is not None:
+            tempo *= self._metronome_channel.multiplier
         total_samples = max(t.length for t in self._tracks)
         sr = self._tracks[0].sample_rate
         self._metronome_track.audio = _generate_metronome(total_samples, sr, tempo)

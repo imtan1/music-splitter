@@ -164,6 +164,23 @@ QPushButton#SoloBtn:checked {
     color: #ffffff;
 }
 
+/* ── 節拍器速度倍率按鈕 ── */
+QPushButton#SpeedBtn {
+    background-color: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    color: #334155;
+    font-weight: bold;
+    font-size: 11px;
+    border-radius: 6px;
+    padding: 0;
+}
+QPushButton#SpeedBtn:hover   { background-color: #e0e7ff; border-color: #a5b4fc; color: #4338ca; }
+QPushButton#SpeedBtn:checked {
+    background-color: #6366f1;
+    border-color: #4338ca;
+    color: #ffffff;
+}
+
 /* ── ⬇ 下載單軌（outline 天藍） ── */
 QPushButton#DownloadBtn {
     background-color: #ffffff;
