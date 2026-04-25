@@ -131,7 +131,7 @@ KEY_PC: dict[str, int] = {
 
 
 class PitchShiftThread(QThread):
-    """逐軌移調（librosa phase vocoder），單執行緒循序執行避免 CPU 飽和造成 UI 假死。"""
+    """逐軌移調（Spotify pedalboard PitchShift），單執行緒循序執行避免 CPU 飽和造成 UI 假死。"""
     finished = Signal(dict)   # {stem_name: shifted_audio_np}
     error    = Signal(str)
 
@@ -143,10 +143,11 @@ class PitchShiftThread(QThread):
 
     def run(self):
         try:
-            import librosa, time
+            import pedalboard, time
             sr, n = self._sr, self._n_steps
             total = len(self._originals)
             print(f"[PitchShift] 開始移調 {n:+d} 半音，共 {total} 軌", flush=True)
+            board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
             result = {}
             for i, (name, audio) in enumerate(self._originals.items(), 1):
                 if self.isInterruptionRequested():
@@ -163,21 +164,9 @@ class PitchShiftThread(QThread):
                 if n == 0:
                     result[name] = audio.copy()
                 else:
-                    # 降到 22050 Hz 再移調：音頻長度減半 → 快 2 倍；完成後升採樣回原 SR
-                    from scipy.signal import resample_poly
-                    half_sr = sr // 2
-
-                    def shift_channel(ch):
-                        down = resample_poly(ch.astype(np.float32), 1, 2)
-                        shifted = librosa.effects.pitch_shift(down, sr=half_sr, n_steps=n, n_fft=1024)
-                        return resample_poly(shifted, 2, 1).astype(np.float32)
-
-                    left  = shift_channel(audio[:, 0])
-                    right = shift_channel(audio[:, 1])
-                    # 確保輸出長度與原音軌一致
-                    length = audio.shape[0]
-                    left, right = left[:length], right[:length]
-                    result[name] = np.stack([left, right], axis=1).astype(np.float32)
+                    # pedalboard 接受 (channels, samples) float32，回傳同形狀
+                    shifted = board(audio.T.astype(np.float32), sr)
+                    result[name] = shifted.T.astype(np.float32)
                 print(f"[PitchShift] ({i}/{total}) {name} 完成，耗時 {time.time()-t0:.1f}s", flush=True)
             print(f"[PitchShift] 全部完成，emit finished", flush=True)
             self.finished.emit(result)
@@ -538,7 +527,7 @@ class ResultView(QWidget):
         self._key_shift_timer.start()
 
     def _apply_pitch_shift(self):
-        """計算半音差，用 librosa phase vocoder 移調（時間保留，不改變播放速度）。"""
+        """計算半音差，用 Spotify pedalboard PitchShift 移調（時間保留，不改變播放速度）。"""
         if not self._tracks or not self._original_audios:
             return
         new_key = self._key_combo.currentText()
