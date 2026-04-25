@@ -104,8 +104,7 @@ class AudioEngine(QObject):
             self._position = 0
 
         self._playing = True
-        # speed × key_factor 共同決定輸出 samplerate
-        output_sr = int(self.sample_rate * self._speed * self._key_factor)
+        output_sr = int(self.sample_rate * self._speed)
         self._stream = sd.OutputStream(
             samplerate=output_sr,
             channels=2,

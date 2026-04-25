@@ -517,11 +517,12 @@ class ResultView(QWidget):
         self._key_shift_timer.start()
 
     def _apply_pitch_shift(self):
-        """計算半音差，透過調整 output samplerate 即時移調（毫秒級）。"""
+        """計算半音差，用 librosa phase vocoder 移調（時間保留，不改變播放速度）。"""
+        if not self._tracks or not self._original_audios:
+            return
         new_key = self._key_combo.currentText()
         new_pc = KEY_PC.get(new_key)
         if new_pc is None or self._base_key_pc is None:
-            self._engine.set_key_factor(1.0)
             return
 
         n_steps = int(new_pc - self._base_key_pc)
@@ -530,8 +531,21 @@ class ResultView(QWidget):
         elif n_steps < -6:
             n_steps += 12
 
-        key_factor = 2.0 ** (n_steps / 12.0)
-        self._engine.set_key_factor(key_factor)
+        if self._pitch_shift_thread is not None and self._pitch_shift_thread.isRunning():
+            self._pitch_shift_thread.quit()
+            self._pitch_shift_thread.wait()
+
+        sr = self._tracks[0].sample_rate
+        self._pitch_shift_thread = PitchShiftThread(self._original_audios, sr, n_steps, self)
+        self._pitch_shift_thread.finished.connect(self._on_pitch_shift_done)
+        self._pitch_shift_thread.start()
+
+    def _on_pitch_shift_done(self, shifted: dict):
+        """移調完成：直接替換 TrackState.audio，不中斷播放。"""
+        track_map = {t.name: t for t in self._tracks}
+        for name, audio in shifted.items():
+            if name in track_map:
+                track_map[name].audio = audio
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
