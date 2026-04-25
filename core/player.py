@@ -83,8 +83,18 @@ class AudioEngine(QObject):
     def set_pitch_semitones(self, n: int):
         """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
         import pedalboard
+        old_board = self._pitch_board
+        self._pitch_board = None    # callback 在切換期間暫時靜音，避免 race condition
+
         if n == 0:
-            self._pitch_board = None
+            return                  # 原調：不需要 board
+
+        if old_board is not None:
+            # 用 silence + reset=True 清空舊緩衝區，再更新 semitones
+            silence = np.zeros((2, 4096), dtype=np.float32)
+            old_board(silence, self.sample_rate, reset=True)
+            old_board[0].semitones = n
+            self._pitch_board = old_board
         else:
             self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
 
