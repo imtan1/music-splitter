@@ -1,3 +1,8 @@
+"""
+音源分離模組
+使用 Demucs htdemucs_6s 模型將音頻拆分為六條音軌：人聲、鼓、貝斯、吉他、鋼琴、其他。
+分源完成後依各軌 onset strength 自動選擇最佳音源做 BPM 偵測，並對原始混音做調性偵測。
+"""
 import os
 import numpy as np
 import torch

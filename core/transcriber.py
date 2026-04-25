@@ -1,6 +1,7 @@
 """
-音頻 → 簡譜音符轉換
-使用 Spotify Basic Pitch 偵測音高，music21 做節奏量化。
+音頻轉簡譜音符模組
+對人聲單軌做純 numpy FFT 自相關音高偵測，再經 music21 節奏量化，輸出 JianpuNote 列表。
+BPM 由 core/bpm.py 估算，調性由 core/key.py 偵測。
 """
 import numpy as np
 from PySide6.QtCore import QThread, Signal

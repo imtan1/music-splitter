@@ -1,3 +1,8 @@
+"""
+音頻播放引擎
+AudioEngine：多軌同步播放，支援靜音、獨奏、音量、播放速度與移調倍率，低延遲 sounddevice callback 混音。
+SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
+"""
 import numpy as np
 import sounddevice as sd
 from PySide6.QtCore import QObject, Signal, QTimer

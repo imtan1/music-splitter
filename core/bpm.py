@@ -1,3 +1,8 @@
+"""
+BPM（節拍速度）偵測模組
+對音頻做低通 300Hz 濾波後，計算 RMS onset flux 並用 Fourier tempogram 找主要節拍頻率。
+支援低速倍頻（< 60 BPM → ×2）與高速減半（> 140 BPM → ÷2）自動修正。
+"""
 import numpy as np
 
 

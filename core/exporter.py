@@ -1,3 +1,7 @@
+"""
+MP3 匯出模組
+將 float32 音頻陣列透過 pydub 與 FFmpeg 匯出為 320kbps MP3 檔案，支援套用音量縮放。
+"""
 import os
 import shutil
 import tempfile

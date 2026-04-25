@@ -1,3 +1,8 @@
+"""
+調性偵測模組
+對音頻做低通 500Hz 濾波後取 bass 頻段（40–500Hz）的 FFT chromagram，
+再以 Krumhansl-Schmuckler 演算法比對大調／小調輪廓，回傳最符合的調性名稱。
+"""
 import numpy as np
 
 

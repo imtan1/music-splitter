@@ -1,3 +1,7 @@
+"""
+混音模組
+依各軌的靜音、獨奏、音量狀態將多條 TrackState 混合為單一立體聲音頻，用於匯出混音 MP3。
+"""
 import numpy as np
 from core.player import TrackState
 
