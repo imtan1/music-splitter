@@ -9,12 +9,13 @@ import numpy as np
 class StreamingPitchShifter:
     """
     無狀態重置的串流相位聲碼器。
-    - N_FFT=4096：高頻率解析度，減少 bin 映射量化誤差
+    - N_FFT=2048 / HOP=512：46ms 視窗，瞬態模糊遠低於 4096 的 93ms
     - 線性插值：分析 bin 分散到相鄰兩個合成 bin，消除頻譜空洞
     - 加權平均頻率：避免多個 bin 疊加時合成相位累積錯誤
+    - Identity phase locking：非峰值 bin 相位鎖定到最近峰值，減少金屬感
     """
-    N_FFT = 4096
-    HOP   = N_FFT // 4   # 1024，75% overlap
+    N_FFT = 2048
+    HOP   = N_FFT // 4   # 512，75% overlap
 
     def __init__(self, n_steps: float):
         self.ratio = 2.0 ** (n_steps / 12.0)
@@ -93,9 +94,38 @@ class StreamingPitchShifter:
         safe_mag = np.where(new_mag > 1e-12, new_mag, 1.0)
         new_tf  /= safe_mag   # 加權平均
 
-        # 合成相位累積
+        # 合成相位累積（所有 bin）
         self._phi_s[c] += new_tf * self.HOP
+
+        # Identity phase locking：非峰值 bin 鎖定到最近峰值，保留和聲相位關係
+        is_peak = np.zeros(bins, dtype=bool)
+        if bins > 2:
+            is_peak[1:-1] = (new_mag[1:-1] > new_mag[:-2]) & (new_mag[1:-1] > new_mag[2:])
+        is_peak[0] = is_peak[-1] = True
+
+        peak_idx = np.where(is_peak)[0]
+        if len(peak_idx) > 1:
+            all_k  = np.arange(bins)
+            ins    = np.searchsorted(peak_idx, all_k)
+            left   = np.clip(ins - 1, 0, len(peak_idx) - 1)
+            right  = np.clip(ins,     0, len(peak_idx) - 1)
+            dist_l = all_k - peak_idx[left]
+            dist_r = peak_idx[right] - all_k
+            nearest = np.where(dist_l <= dist_r, left, right)
+            p_bin   = peak_idx[nearest]   # 各 bin 最近的峰值 bin
+
+            # 反映射到 analysis 空間，取得對應的 analysis phase
+            k_a = np.clip((all_k / self.ratio).astype(int), 0, bins - 1)
+            p_a = np.clip((p_bin / self.ratio).astype(int), 0, bins - 1)
+
+            non_peak = ~is_peak
+            self._phi_s[c][non_peak] = (
+                self._phi_s[c][p_bin[non_peak]]
+                + phi[k_a[non_peak]]
+                - phi[p_a[non_peak]]
+            )
 
         out_spec  = new_mag * np.exp(1j * self._phi_s[c])
         out_frame = np.fft.irfft(out_spec).real * self._win
+        # hanning 75% overlap COLA sum = 2.0，正規化係數 = 0.5
         return out_frame * (self.HOP / self.N_FFT * 2.0)
