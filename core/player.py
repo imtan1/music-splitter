@@ -6,6 +6,7 @@ SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
 import numpy as np
 import sounddevice as sd
 from PySide6.QtCore import QObject, Signal, QTimer
+from core.pitch import StreamingPitchShifter
 
 
 class TrackState:
@@ -41,7 +42,7 @@ class AudioEngine(QObject):
         self._playing = False
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
-        self._pitch_board = None        # pedalboard.Pedalboard | None，即時移調
+        self._pitch_shifter: StreamingPitchShifter | None = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -82,18 +83,9 @@ class AudioEngine(QObject):
 
     def set_pitch_semitones(self, n: int):
         """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
-        import pedalboard
-        old_board = self._pitch_board
-        self._pitch_board = None            # callback 在切換期間暫時輸出原音
-
-        if n == 0:
-            return
-
-        if old_board is not None:
-            old_board[0].semitones = n
-            self._pitch_board = old_board
-        else:
-            self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
+        self._pitch_shifter = None          # callback 在切換期間暫時輸出原音
+        if n != 0:
+            self._pitch_shifter = StreamingPitchShifter(n)
 
 
     def get_position_ratio(self) -> float:
@@ -175,17 +167,9 @@ class AudioEngine(QObject):
         mixed *= self._master_volume
         np.clip(mixed, -1.0, 1.0, out=mixed)
 
-        board = self._pitch_board
-        if board is not None:
-            out = board(mixed.T, self.sample_rate, reset=False)  # (2, N)
-            n = out.shape[1]
-            if n >= frames:
-                mixed = out.T[:frames].astype(np.float32)
-            else:
-                buf = np.zeros((frames, 2), dtype=np.float32)
-                if n > 0:
-                    buf[:n] = out.T
-                mixed = buf
+        shifter = self._pitch_shifter
+        if shifter is not None:
+            mixed = shifter.process(mixed)
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
         outdata[:] = mixed
