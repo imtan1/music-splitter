@@ -91,7 +91,8 @@ class TranscriberThread(QThread):
             if self.initial_tempo > 0:
                 tempo = self.initial_tempo
             else:
-                tempo = _estimate_tempo_fast(mono_ds, ANALYSIS_SR)
+                from core.analyzer import detect_bpm
+                tempo = detect_bpm(mono_ds, ANALYSIS_SR)
             beat_dur = 60.0 / tempo
             print(f"[MIDI] BPM={tempo:.1f}", flush=True, file=sys.stderr)
 
@@ -113,8 +114,8 @@ class TranscriberThread(QThread):
                 key = self.initial_key
             else:
                 self.progress.emit("偵測調性...", 80)
-                from core.separator import _detect_key_chromagram
-                key = _detect_key_chromagram(mono_np, ANALYSIS_SR2)
+                from core.analyzer import detect_key
+                key = detect_key(mono_np, ANALYSIS_SR2)
 
             self.progress.emit("節奏量化中（music21）...", 85)
             notes = _to_jianpu_music21(raw, key, beat_dur)
@@ -138,55 +139,6 @@ def convert_raw_to_jianpu(raw_notes: list, key: str, beat_dur: float) -> list:
 # ──────────────────────────────────────────────
 # 內部實作
 # ──────────────────────────────────────────────
-
-def _estimate_tempo_fast(mono: np.ndarray, sr: int, default: float = 120.0) -> float:
-    """
-    低頻 RMS flux + Fourier tempogram 估 BPM。
-    低通 300Hz 後分析，避免人聲/旋律干擾節拍偵測。
-    """
-    from scipy.signal import butter, filtfilt, find_peaks
-
-    # 低通 300Hz 保留鼓/低頻節拍
-    try:
-        b, a = butter(4, min(300.0 / (sr / 2), 0.99), btype='low')
-        low = filtfilt(b, a, mono).astype(np.float32)
-    except Exception:
-        low = mono
-
-    HOP = 512
-    n = len(low) // HOP
-    if n < 8:
-        return default
-
-    frames = low[:n * HOP].reshape(n, HOP)
-    rms = np.sqrt(np.mean(frames ** 2, axis=1))
-    flux = np.maximum(np.diff(rms), 0).astype(np.float32)
-    if flux.std() < 1e-8:
-        return default
-
-    onset_sr = sr / HOP
-    F = np.abs(np.fft.rfft(flux, n=len(flux) * 8))
-    bpm_arr = np.fft.rfftfreq(len(flux) * 8, d=1.0 / onset_sr) * 60.0
-    mask = (bpm_arr >= 40) & (bpm_arr <= 180)
-    F_m, b_m = F[mask], bpm_arr[mask]
-    if len(F_m) == 0:
-        return default
-
-    peaks, props = find_peaks(F_m, height=F_m.max() * 0.25)
-    if len(peaks) == 0:
-        peaks = [int(np.argmax(F_m))]
-        props = {'peak_heights': np.array([F_m[peaks[0]]])}
-
-    candidates = sorted(zip(F_m[peaks], b_m[peaks]), reverse=True)
-    for _, b in candidates:
-        if b > 140:
-            b = b / 2
-        elif b < 60:
-            b = b * 2
-        if 50 <= b <= 160:
-            return float(b)
-    return default
-
 
 def _segment_notes(f0, voiced, times, beat_dur):
     """向量化音符分割，避免 Python loop。"""
