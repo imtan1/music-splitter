@@ -131,7 +131,7 @@ KEY_PC: dict[str, int] = {
 
 
 class PitchShiftThread(QThread):
-    """平行處理所有音軌的音調轉換（librosa + ThreadPoolExecutor）。"""
+    """逐軌移調（librosa phase vocoder），單執行緒循序執行避免 CPU 飽和造成 UI 假死。"""
     finished = Signal(dict)   # {stem_name: shifted_audio_np}
     error    = Signal(str)
 
@@ -144,22 +144,17 @@ class PitchShiftThread(QThread):
     def run(self):
         try:
             import librosa
-            from concurrent.futures import ThreadPoolExecutor
-
             sr, n = self._sr, self._n_steps
-
-            def shift_one(item):
-                name, audio = item
+            result = {}
+            for name, audio in self._originals.items():
+                if self.isInterruptionRequested():
+                    return
                 if n == 0:
-                    return name, audio.copy()
-                left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n)
-                right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n)
-                return name, np.stack([left, right], axis=1).astype(np.float32)
-
-            n_workers = min(6, max(1, len(self._originals)))
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                result = dict(ex.map(shift_one, self._originals.items()))
-
+                    result[name] = audio.copy()
+                else:
+                    left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n)
+                    right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n)
+                    result[name] = np.stack([left, right], axis=1).astype(np.float32)
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
@@ -531,9 +526,16 @@ class ResultView(QWidget):
         elif n_steps < -6:
             n_steps += 12
 
+        # 若舊執行緒仍在跑，通知它中止（不阻塞等待）並斷開舊 signal
         if self._pitch_shift_thread is not None and self._pitch_shift_thread.isRunning():
-            self._pitch_shift_thread.quit()
-            self._pitch_shift_thread.wait()
+            self._pitch_shift_thread.requestInterruption()
+            try:
+                self._pitch_shift_thread.finished.disconnect()
+            except RuntimeError:
+                pass
+
+        # 鎖住 combo，防止重複觸發
+        self._key_combo.setEnabled(False)
 
         sr = self._tracks[0].sample_rate
         self._pitch_shift_thread = PitchShiftThread(self._original_audios, sr, n_steps, self)
@@ -541,11 +543,12 @@ class ResultView(QWidget):
         self._pitch_shift_thread.start()
 
     def _on_pitch_shift_done(self, shifted: dict):
-        """移調完成：直接替換 TrackState.audio，不中斷播放。"""
+        """移調完成：直接替換 TrackState.audio，解鎖 combo，不中斷播放。"""
         track_map = {t.name: t for t in self._tracks}
         for name, audio in shifted.items():
             if name in track_map:
                 track_map[name].audio = audio
+        self._key_combo.setEnabled(True)
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
