@@ -22,6 +22,36 @@ STEM_LABELS = {
 }
 
 
+def _pick_key_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
+    """
+    依各軌 RMS 能量選出最適合做調性分析的音源。
+    優先順序：vocals → piano → guitar → original
+    避免使用：drums、bass、other（節奏性音軌，調性資訊少）
+    """
+    THRESHOLD = 0.05  # 相對門檻：至少達最強候選軌的 5%
+
+    def rms(stem_name):
+        data = result.get(stem_name)
+        if data is None:
+            return 0.0
+        audio_np, _ = data
+        mono = audio_np.mean(axis=1).astype(np.float32)
+        return float(np.sqrt(np.mean(mono ** 2)))
+
+    candidates = ('vocals', 'piano', 'guitar')
+    scores = {s: rms(s) for s in candidates}
+    best_score = max(scores.values()) if scores else 0.0
+
+    def get_mono(stem_name):
+        audio_np, _ = result[stem_name]
+        return audio_np.mean(axis=1).astype(np.float32)
+
+    for stem in candidates:
+        if best_score > 0 and scores[stem] >= best_score * THRESHOLD and scores[stem] > 1e-6:
+            return get_mono(stem)
+    return original_mono
+
+
 def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
     """
     依各軌 onset strength 選出最適合做 BPM 分析的音源。
@@ -139,7 +169,8 @@ class SeparatorThread(QThread):
             original_mono = original_wav_np.mean(axis=0).astype(np.float32)
             tempo_src = _pick_tempo_source(result, original_mono)
             tempo = detect_bpm(tempo_src, sr)
-            key = detect_key(original_mono, sr)
+            key_src = _pick_key_source(result, original_mono)
+            key = detect_key(key_src, sr)
 
             self.progress.emit("完成！", 100)
             self.finished.emit(result, tempo, key)
