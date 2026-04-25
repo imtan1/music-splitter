@@ -42,6 +42,7 @@ class AudioEngine(QObject):
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
         self._pitch_board = None        # pedalboard.Pedalboard | None，即時移調
+        self._prev_pitch_chunk: np.ndarray | None = None  # overlap context
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -84,7 +85,8 @@ class AudioEngine(QObject):
         """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
         import pedalboard
         old_board = self._pitch_board
-        self._pitch_board = None    # callback 在切換期間暫時輸出原音
+        self._pitch_board = None            # callback 在切換期間暫時輸出原音
+        self._prev_pitch_chunk = None       # 清除舊 context，避免跨調性接錯
 
         if n == 0:
             return
@@ -141,6 +143,7 @@ class AudioEngine(QObject):
     def stop(self):
         self.pause()
         self._position = 0
+        self._prev_pitch_chunk = None
         self.position_changed.emit(0.0)
 
     def is_playing(self) -> bool:
@@ -177,15 +180,18 @@ class AudioEngine(QObject):
 
         board = self._pitch_board
         if board is not None:
-            out = board(mixed.T, self.sample_rate, reset=True)  # (2, N)
-            n = out.shape[1]
-            if n >= frames:
-                mixed = out.T[:frames]
+            prev = self._prev_pitch_chunk
+            if prev is not None:
+                # [prev_chunk | curr_chunk] 一起送入，取輸出的後半段
+                # phase vocoder 用 prev 作為 context，curr 的輸出就有連續相位
+                extended = np.concatenate([prev, mixed], axis=0)  # (2*frames, 2)
+                out = board(extended.T, self.sample_rate, reset=True).T  # (2*frames, 2)
+                mixed = out[frames:frames * 2].astype(np.float32)
             else:
-                buf = np.zeros((frames, 2), dtype=np.float32)
-                if n > 0:
-                    buf[:n] = out.T
-                mixed = buf
+                out = board(mixed.T, self.sample_rate, reset=True).T  # (frames, 2)
+                mixed = out[:frames].astype(np.float32)
+            self._prev_pitch_chunk = mixed.copy()
+            np.clip(mixed, -1.0, 1.0, out=mixed)
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
         outdata[:] = mixed
