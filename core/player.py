@@ -189,8 +189,10 @@ class AudioEngine(QObject):
 
             if self._pitch_debug_count > 0:
                 self._pitch_debug_count -= 1
+                in_max  = float(np.abs(mixed).max())
+                out_max = float(np.abs(out).max())
                 print(f"[CB] pos={self._position} frames={frames} reset={do_reset} "
-                      f"in={mixed.shape} out=({n},2)", flush=True)
+                      f"in_max={in_max:.4f} out_max={out_max:.4f}", flush=True)
 
             if n >= frames:
                 mixed = out.T[:frames]
