@@ -143,20 +143,28 @@ class PitchShiftThread(QThread):
 
     def run(self):
         try:
-            import librosa
+            import librosa, time
             sr, n = self._sr, self._n_steps
+            total = len(self._originals)
+            print(f"[PitchShift] 開始移調 {n:+d} 半音，共 {total} 軌", flush=True)
             result = {}
-            for name, audio in self._originals.items():
+            for i, (name, audio) in enumerate(self._originals.items(), 1):
                 if self.isInterruptionRequested():
+                    print(f"[PitchShift] 中止（第 {i}/{total} 軌前）", flush=True)
                     return
+                t0 = time.time()
+                print(f"[PitchShift] ({i}/{total}) 處理 {name} ...", flush=True)
                 if n == 0:
                     result[name] = audio.copy()
                 else:
                     left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n)
                     right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n)
                     result[name] = np.stack([left, right], axis=1).astype(np.float32)
+                print(f"[PitchShift] ({i}/{total}) {name} 完成，耗時 {time.time()-t0:.1f}s", flush=True)
+            print(f"[PitchShift] 全部完成，emit finished", flush=True)
             self.finished.emit(result)
         except Exception as e:
+            print(f"[PitchShift] 錯誤: {e}", flush=True)
             self.error.emit(str(e))
 
 
@@ -528,6 +536,7 @@ class ResultView(QWidget):
 
         # 若舊執行緒仍在跑，通知它中止（不阻塞等待）並斷開舊 signal
         if self._pitch_shift_thread is not None and self._pitch_shift_thread.isRunning():
+            print("[PitchShift] 舊執行緒仍在跑，發出中止請求", flush=True)
             self._pitch_shift_thread.requestInterruption()
             try:
                 self._pitch_shift_thread.finished.disconnect()
@@ -535,20 +544,29 @@ class ResultView(QWidget):
                 pass
 
         # 鎖住 combo，防止重複觸發
+        print(f"[PitchShift] 鎖住調性選單，啟動執行緒（{n_steps:+d} 半音）", flush=True)
         self._key_combo.setEnabled(False)
 
         sr = self._tracks[0].sample_rate
         self._pitch_shift_thread = PitchShiftThread(self._original_audios, sr, n_steps, self)
         self._pitch_shift_thread.finished.connect(self._on_pitch_shift_done)
+        self._pitch_shift_thread.error.connect(lambda e: (
+            print(f"[PitchShift] 執行緒錯誤: {e}", flush=True),
+            self._key_combo.setEnabled(True)
+        ))
         self._pitch_shift_thread.start()
+        print(f"[PitchShift] 執行緒已啟動，isRunning={self._pitch_shift_thread.isRunning()}", flush=True)
 
     def _on_pitch_shift_done(self, shifted: dict):
         """移調完成：直接替換 TrackState.audio，解鎖 combo，不中斷播放。"""
+        print(f"[PitchShift] _on_pitch_shift_done 收到 {len(shifted)} 軌，解鎖選單", flush=True)
         track_map = {t.name: t for t in self._tracks}
         for name, audio in shifted.items():
             if name in track_map:
                 track_map[name].audio = audio
+                print(f"[PitchShift] 更新 TrackState: {name}", flush=True)
         self._key_combo.setEnabled(True)
+        print("[PitchShift] 選單已解鎖", flush=True)
 
     def _on_tempo_changed(self, value: int):
         """BPM 改動：即時更新播放速度，並用防抖計時器重建節拍器。"""
