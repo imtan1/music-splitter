@@ -169,7 +169,7 @@ class AudioEngine(QObject):
         board = self._pitch_board
         if board is not None:
             # (frames, 2) → (2, frames) → pedalboard → (2, frames) → (frames, 2)
-            mixed = board(mixed.T, self.sample_rate).T[:frames]
+            mixed = board(mixed.T, self.sample_rate, reset=False).T[:frames]
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
         outdata[:] = mixed
