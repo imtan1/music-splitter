@@ -168,8 +168,16 @@ class AudioEngine(QObject):
 
         board = self._pitch_board
         if board is not None:
-            # (frames, 2) → (2, frames) → pedalboard → (2, frames) → (frames, 2)
-            mixed = board(mixed.T, self.sample_rate, reset=False).T[:frames]
+            out = board(mixed.T, self.sample_rate, reset=False)  # (2, N)，N 可能 < frames
+            n = out.shape[1]
+            if n >= frames:
+                mixed = out.T[:frames]
+            else:
+                # 初始緩衝期輸出樣本不足，零補到 frames 避免 shape mismatch
+                buf = np.zeros((frames, 2), dtype=np.float32)
+                if n > 0:
+                    buf[:n] = out.T
+                mixed = buf
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
         outdata[:] = mixed
