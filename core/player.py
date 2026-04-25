@@ -42,7 +42,6 @@ class AudioEngine(QObject):
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
         self._pitch_board = None        # pedalboard.Pedalboard | None，即時移調
-        self._pitch_reset_next = False  # 切換調後第一個 chunk 需要 reset=True
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -96,7 +95,6 @@ class AudioEngine(QObject):
         else:
             self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
 
-        self._pitch_reset_next = True   # 第一個 chunk 用 reset=True 初始化
 
     def get_position_ratio(self) -> float:
         if self._length == 0:
@@ -179,12 +177,8 @@ class AudioEngine(QObject):
 
         board = self._pitch_board
         if board is not None:
-            do_reset = self._pitch_reset_next
-            self._pitch_reset_next = False
-            out = board(mixed.T, self.sample_rate, reset=do_reset)  # (2, N)
+            out = board(mixed.T, self.sample_rate, reset=True)  # (2, N)
             n = out.shape[1]
-
-
             if n >= frames:
                 mixed = out.T[:frames]
             else:
