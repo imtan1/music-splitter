@@ -139,6 +139,7 @@ class ResultView(QWidget):
         self._engine = AudioEngine(self)
         self._engine.position_changed.connect(self._on_position_changed)
         self._engine.playback_stopped.connect(self._on_playback_stopped)
+        self._engine.pitch_processing_changed.connect(self._on_pitch_processing_changed)
 
         self._channels: list[TrackChannel] = []
         self._tracks: list[TrackState] = []
@@ -325,6 +326,11 @@ class ResultView(QWidget):
         self._key_combo.currentTextChanged.connect(self._on_key_changed)
         info_row.addWidget(self._key_combo)
 
+        self._pitch_status_lbl = QLabel("⏳ 高品質移調處理中…")
+        self._pitch_status_lbl.setObjectName("SmallLabel")
+        self._pitch_status_lbl.setVisible(False)
+        info_row.addWidget(self._pitch_status_lbl)
+
         info_row.addStretch()
         master_layout.addLayout(info_row)
 
@@ -415,6 +421,10 @@ class ResultView(QWidget):
             self._engine.seek(self._seek_bar.value() / 1000.0)
             self._engine.play()
             self._play_btn.setText("⏸ 暫停")
+
+    def _on_pitch_processing_changed(self, processing: bool):
+        self._pitch_status_lbl.setVisible(processing)
+        self._key_combo.setEnabled(not processing)
 
     def _on_playback_stopped(self):
         self._play_btn.setText("▶ 整體播放")

@@ -3,9 +3,10 @@
 AudioEngine：多軌同步播放，支援靜音、獨奏、音量、播放速度與移調倍率，低延遲 sounddevice callback 混音。
 SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
 """
+import threading
 import numpy as np
 import sounddevice as sd
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, Slot, Qt, QMetaObject
 from core.pitch import StreamingPitchShifter
 
 
@@ -30,6 +31,7 @@ class AudioEngine(QObject):
     """
     position_changed = Signal(float)   # 0.0 ~ 1.0
     playback_stopped = Signal()
+    pitch_processing_changed = Signal(bool)   # True=背景處理中, False=完成
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -43,6 +45,9 @@ class AudioEngine(QObject):
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
         self._pitch_shifter: StreamingPitchShifter | None = None
+        self._pitch_n: int = 0
+        self._orig_audios: dict[int, np.ndarray] = {}   # track index → 原始音頻
+        self._pending_switch: list[np.ndarray] | None = None  # 離線處理完成後的原子切換
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -54,6 +59,10 @@ class AudioEngine(QObject):
 
     def load_tracks(self, tracks: list[TrackState]):
         self.stop()
+        self._pitch_n = 0
+        self._pitch_shifter = None
+        self._orig_audios.clear()
+        self._pending_switch = None
         self.tracks = tracks
         if tracks:
             self.sample_rate = tracks[0].sample_rate
@@ -82,10 +91,66 @@ class AudioEngine(QObject):
             self.play()
 
     def set_pitch_semitones(self, n: int):
-        """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
-        self._pitch_shifter = None          # callback 在切換期間暫時輸出原音
-        if n != 0:
-            self._pitch_shifter = StreamingPitchShifter(n)
+        """
+        兩段式移調：
+        1. 立刻建立 StreamingPitchShifter 提供即時（低品質）預覽
+        2. 同步在背景用 pedalboard RubberBand 做高品質離線處理，完成後自動切換
+        """
+        self._pitch_n = n
+        self._pending_switch = None         # 取消未生效的上一次切換
+
+        if n == 0:
+            self._pitch_shifter = None
+            for i, track in enumerate(self.tracks):
+                if i in self._orig_audios:
+                    track.audio = self._orig_audios[i]
+            self.pitch_processing_changed.emit(False)
+            return
+
+        # 保存原始音頻（只在第一次換調時儲存）
+        for i, track in enumerate(self.tracks):
+            if i not in self._orig_audios:
+                self._orig_audios[i] = track.audio
+            # 確保 track.audio 指向原始版（避免前次處理結果被再次移調）
+            track.audio = self._orig_audios[i]
+
+        # 即時預覽
+        self._pitch_shifter = StreamingPitchShifter(n)
+
+        # 背景高品質處理
+        self.pitch_processing_changed.emit(True)
+        threading.Thread(target=self._bg_pitch, args=(n,), daemon=True).start()
+
+    def _bg_pitch(self, n: int):
+        """背景執行緒：用 pedalboard RubberBand 離線處理，完成後推送原子切換。"""
+        try:
+            from pedalboard import Pedalboard, PitchShift
+            board = Pedalboard([PitchShift(semitones=float(n))])
+            sr = self.sample_rate
+            new_audios: list[np.ndarray] = []
+
+            for i, track in enumerate(self.tracks):
+                if self._pitch_n != n:
+                    return              # 使用者已改調，放棄本次處理
+                orig = self._orig_audios.get(i)
+                if orig is None:
+                    new_audios.append(track.audio)
+                    continue
+                # pedalboard 需要 (channels, samples) float32
+                shifted = board(orig.T.astype(np.float32), sr).T.astype(np.float32)
+                new_audios.append(shifted)
+
+            if self._pitch_n == n:
+                self._pending_switch = new_audios  # callback 會原子套用
+                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
+        except Exception as e:
+            print(f"[pitch bg] error: {e}")
+            if self._pitch_n == n:
+                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
+
+    @Slot()
+    def _on_bg_pitch_done(self):
+        self.pitch_processing_changed.emit(False)
 
 
     def get_position_ratio(self) -> float:
@@ -143,6 +208,14 @@ class AudioEngine(QObject):
     # ------------------------------------------------------------------
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status):
+        # 離線移調完成 → 原子切換 track.audio + 停用即時預覽
+        switch = self._pending_switch
+        if switch is not None:
+            self._pending_switch = None
+            self._pitch_shifter = None
+            for track, new_audio in zip(self.tracks, switch):
+                track.audio = new_audio
+
         mixed = np.zeros((frames, 2), dtype=np.float32)
         any_solo = any(t.solo for t in self.tracks)
         pos = self._position
