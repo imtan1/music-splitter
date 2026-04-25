@@ -541,25 +541,17 @@ class ResultView(QWidget):
         self._metro_rebuild_timer.start()
 
     def _rebuild_metronome(self):
-        """重建節拍器音軌（BPM 或速度倍率變動後觸發）。"""
+        """重建節拍器音軌（BPM 或速度倍率變動後觸發）。
+        直接替換 TrackState.audio reference，engine callback 下一幀自動生效，不中斷播放。
+        """
         if not self._tracks or self._metronome_track is None:
             return
-        was_playing = self._engine.is_playing()
-        self._engine.pause()
-
         tempo = float(self._tempo_spin.value())
         if self._metronome_channel is not None:
             tempo *= self._metronome_channel.multiplier
         total_samples = max(t.length for t in self._tracks)
         sr = self._tracks[0].sample_rate
         self._metronome_track.audio = _generate_metronome(total_samples, sr, tempo)
-
-        engine_tracks = self._tracks + [self._metronome_track]
-        self._engine.load_tracks(engine_tracks)
-
-        if was_playing:
-            self._engine.play()
-            self._play_btn.setText("⏸ 暫停")
 
     def _on_mute_changed(self, stem_name: str, muted: bool):
         pass  # TrackState 已在 channel 內更新，引擎 callback 自動讀取
