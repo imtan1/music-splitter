@@ -31,6 +31,48 @@ def _detect_tempo_key(wav_np: np.ndarray, sr: int) -> tuple:
     return tempo, key
 
 
+def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
+    """
+    依各軌 onset strength 選出最適合做 BPM 分析的音源。
+    優先順序：drums → bass → piano/guitar（取較強者）→ original
+    """
+    THRESHOLD = 0.1  # 相對門檻：至少達最強軌的 10%
+
+    def onset_strength(stem_name):
+        data = result.get(stem_name)
+        if data is None:
+            return 0.0
+        audio_np, _ = data
+        mono = audio_np.mean(axis=1).astype(np.float32)  # (samples, ch) → mono
+        HOP = 512
+        n = len(mono) // HOP
+        if n < 4:
+            return 0.0
+        frames = mono[:n * HOP].reshape(n, HOP)
+        rms = np.sqrt(np.mean(frames ** 2, axis=1))
+        flux = np.maximum(np.diff(rms), 0)
+        return float(flux.mean())
+
+    scores = {s: onset_strength(s) for s in ('drums', 'bass', 'piano', 'guitar')}
+    best_score = max(scores.values()) if scores else 0.0
+
+    def strong(s):
+        return best_score > 0 and scores[s] >= best_score * THRESHOLD and scores[s] > 1e-6
+
+    def get_mono(stem_name):
+        audio_np, _ = result[stem_name]
+        return audio_np.mean(axis=1).astype(np.float32)
+
+    if strong('drums'):
+        return get_mono('drums')
+    if strong('bass'):
+        return get_mono('bass')
+    melodic = max(('piano', 'guitar'), key=lambda s: scores[s])
+    if strong(melodic):
+        return get_mono(melodic)
+    return original_mono
+
+
 def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
     """
     Bass-weighted FFT chromagram + Krumhansl-Schmuckler 演算法偵測調性，純 numpy。
@@ -119,10 +161,7 @@ class SeparatorThread(QThread):
                 channels=model.audio_channels,
             )
             # wav shape: (channels, samples) — torch tensor on CPU
-
-            # 在分源前偵測 BPM 與調性
-            self.progress.emit("偵測 BPM 與調性...", 18)
-            tempo, key = _detect_tempo_key(wav.numpy(), model.samplerate)
+            original_wav_np = wav.numpy()  # 正規化前保存，供 BPM/key 分析備用
 
             ref = wav.mean(0)
             wav = (wav - ref.mean()) / ref.std()
@@ -155,6 +194,14 @@ class SeparatorThread(QThread):
                 audio = sources[i].cpu().numpy()  # (channels, samples)
                 audio = audio.T.astype(np.float32)  # (samples, channels)
                 result[stem_name] = (audio, sr)
+
+            # 分源後用各軌 onset strength 選最佳 BPM 音源
+            self.progress.emit("偵測 BPM 與調性...", 95)
+            from core.transcriber import _estimate_tempo_fast
+            original_mono = original_wav_np.mean(axis=0).astype(np.float32)
+            tempo_src = _pick_tempo_source(result, original_mono)
+            tempo = _estimate_tempo_fast(tempo_src, sr)
+            key = _detect_key_chromagram(original_mono, sr)
 
             self.progress.emit("完成！", 100)
             self.finished.emit(result, tempo, key)
