@@ -60,7 +60,7 @@ def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
 
 
 def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
-    from core.analyzer import detect_key
+    from core.key import detect_key
     return detect_key(mono, sr)
 
 
@@ -129,7 +129,8 @@ class SeparatorThread(QThread):
 
             # 分源後用各軌 onset strength 選最佳 BPM 音源
             self.progress.emit("偵測 BPM 與調性...", 95)
-            from core.analyzer import detect_bpm, detect_key
+            from core.bpm import detect_bpm
+            from core.key import detect_key
             original_mono = original_wav_np.mean(axis=0).astype(np.float32)
             tempo_src = _pick_tempo_source(result, original_mono)
             tempo = detect_bpm(tempo_src, sr)

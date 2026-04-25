@@ -91,7 +91,7 @@ class TranscriberThread(QThread):
             if self.initial_tempo > 0:
                 tempo = self.initial_tempo
             else:
-                from core.analyzer import detect_bpm
+                from core.bpm import detect_bpm
                 tempo = detect_bpm(mono_ds, ANALYSIS_SR)
             beat_dur = 60.0 / tempo
             print(f"[MIDI] BPM={tempo:.1f}", flush=True, file=sys.stderr)
@@ -114,7 +114,7 @@ class TranscriberThread(QThread):
                 key = self.initial_key
             else:
                 self.progress.emit("偵測調性...", 80)
-                from core.analyzer import detect_key
+                from core.key import detect_key
                 key = detect_key(mono_np, ANALYSIS_SR2)
 
             self.progress.emit("節奏量化中（music21）...", 85)
