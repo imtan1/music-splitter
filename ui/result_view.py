@@ -153,12 +153,19 @@ class PitchShiftThread(QThread):
                     print(f"[PitchShift] 中止（第 {i}/{total} 軌前）", flush=True)
                     return
                 t0 = time.time()
-                print(f"[PitchShift] ({i}/{total}) 處理 {name} ...", flush=True)
+                # 幾乎靜音的軌直接跳過（如未使用的 piano/guitar）
+                rms = float(np.sqrt(np.mean(audio ** 2)))
+                if rms < 1e-4:
+                    result[name] = audio.copy()
+                    print(f"[PitchShift] ({i}/{total}) {name} 靜音跳過 (rms={rms:.2e})", flush=True)
+                    continue
+                print(f"[PitchShift] ({i}/{total}) 處理 {name}（rms={rms:.4f}）...", flush=True)
                 if n == 0:
                     result[name] = audio.copy()
                 else:
-                    left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n)
-                    right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n)
+                    # n_fft=1024 比預設 2048 快約 2 倍，移調監聽品質仍足夠
+                    left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n, n_fft=1024)
+                    right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n, n_fft=1024)
                     result[name] = np.stack([left, right], axis=1).astype(np.float32)
                 print(f"[PitchShift] ({i}/{total}) {name} 完成，耗時 {time.time()-t0:.1f}s", flush=True)
             print(f"[PitchShift] 全部完成，emit finished", flush=True)
