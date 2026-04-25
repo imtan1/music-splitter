@@ -181,17 +181,16 @@ class AudioEngine(QObject):
         board = self._pitch_board
         if board is not None:
             prev = self._prev_pitch_chunk
+            self._prev_pitch_chunk = mixed.copy()   # 存原始（移調前）供下次使用
             if prev is not None:
-                # [prev_chunk | curr_chunk] 一起送入，取輸出的後半段
-                # phase vocoder 用 prev 作為 context，curr 的輸出就有連續相位
+                # [prev_原始 | curr_原始] 一起送入，取輸出後半段
+                # phase vocoder 用原始 prev 作 context，curr 輸出才有連續相位
                 extended = np.concatenate([prev, mixed], axis=0)  # (2*frames, 2)
                 out = board(extended.T, self.sample_rate, reset=True).T  # (2*frames, 2)
                 mixed = out[frames:frames * 2].astype(np.float32)
             else:
                 out = board(mixed.T, self.sample_rate, reset=True).T  # (frames, 2)
                 mixed = out[:frames].astype(np.float32)
-            self._prev_pitch_chunk = mixed.copy()
-            np.clip(mixed, -1.0, 1.0, out=mixed)
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
         outdata[:] = mixed
