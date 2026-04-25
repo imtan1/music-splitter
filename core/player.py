@@ -41,9 +41,8 @@ class AudioEngine(QObject):
         self._playing = False
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
-        self._pitch_board = None    # pedalboard.Pedalboard | None，即時移調
+        self._pitch_board = None        # pedalboard.Pedalboard | None，即時移調
         self._pitch_reset_next = False  # 切換調後第一個 chunk 需要 reset=True
-        self._pitch_debug_count = 0     # 切換後印前 N 個 callback，DEBUG 用
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -89,7 +88,6 @@ class AudioEngine(QObject):
         self._pitch_board = None    # callback 在切換期間暫時輸出原音
 
         if n == 0:
-            print("[PitchShift] semitones=0，關閉 board", flush=True)
             return
 
         if old_board is not None:
@@ -99,8 +97,6 @@ class AudioEngine(QObject):
             self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
 
         self._pitch_reset_next = True   # 第一個 chunk 用 reset=True 初始化
-        self._pitch_debug_count = 10    # 接下來印 10 個 callback
-        print(f"[PitchShift] board 設定完成，semitones={n}，等待 callback", flush=True)
 
     def get_position_ratio(self) -> float:
         if self._length == 0:
@@ -122,6 +118,7 @@ class AudioEngine(QObject):
             samplerate=output_sr,
             channels=2,
             dtype="float32",
+            blocksize=4096,     # pedalboard PitchShift 需要夠大的 chunk 才能正確運作
             callback=self._callback,
             finished_callback=self._on_stream_finished,
             latency='low',
@@ -187,12 +184,6 @@ class AudioEngine(QObject):
             out = board(mixed.T, self.sample_rate, reset=do_reset)  # (2, N)
             n = out.shape[1]
 
-            if self._pitch_debug_count > 0:
-                self._pitch_debug_count -= 1
-                in_max  = float(np.abs(mixed).max())
-                out_max = float(np.abs(out).max())
-                print(f"[CB] pos={self._position} frames={frames} reset={do_reset} "
-                      f"in_max={in_max:.4f} out_max={out_max:.4f}", flush=True)
 
             if n >= frames:
                 mixed = out.T[:frames]
