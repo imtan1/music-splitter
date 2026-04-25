@@ -163,9 +163,20 @@ class PitchShiftThread(QThread):
                 if n == 0:
                     result[name] = audio.copy()
                 else:
-                    # n_fft=1024 比預設 2048 快約 2 倍，移調監聽品質仍足夠
-                    left  = librosa.effects.pitch_shift(audio[:, 0].astype(np.float32), sr=sr, n_steps=n, n_fft=1024)
-                    right = librosa.effects.pitch_shift(audio[:, 1].astype(np.float32), sr=sr, n_steps=n, n_fft=1024)
+                    # 降到 22050 Hz 再移調：音頻長度減半 → 快 2 倍；完成後升採樣回原 SR
+                    from scipy.signal import resample_poly
+                    half_sr = sr // 2
+
+                    def shift_channel(ch):
+                        down = resample_poly(ch.astype(np.float32), 1, 2)
+                        shifted = librosa.effects.pitch_shift(down, sr=half_sr, n_steps=n, n_fft=1024)
+                        return resample_poly(shifted, 2, 1).astype(np.float32)
+
+                    left  = shift_channel(audio[:, 0])
+                    right = shift_channel(audio[:, 1])
+                    # 確保輸出長度與原音軌一致
+                    length = audio.shape[0]
+                    left, right = left[:length], right[:length]
                     result[name] = np.stack([left, right], axis=1).astype(np.float32)
                 print(f"[PitchShift] ({i}/{total}) {name} 完成，耗時 {time.time()-t0:.1f}s", flush=True)
             print(f"[PitchShift] 全部完成，emit finished", flush=True)
