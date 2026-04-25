@@ -42,6 +42,8 @@ class AudioEngine(QObject):
 
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
         self._pitch_board = None    # pedalboard.Pedalboard | None，即時移調
+        self._pitch_reset_next = False  # 切換調後第一個 chunk 需要 reset=True
+        self._pitch_debug_count = 0     # 切換後印前 N 個 callback，DEBUG 用
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -84,19 +86,21 @@ class AudioEngine(QObject):
         """設定移調半音數。即時生效，不重啟串流，callback 內每個 chunk 即時套用。"""
         import pedalboard
         old_board = self._pitch_board
-        self._pitch_board = None    # callback 在切換期間暫時靜音，避免 race condition
+        self._pitch_board = None    # callback 在切換期間暫時輸出原音
 
         if n == 0:
-            return                  # 原調：不需要 board
+            print("[PitchShift] semitones=0，關閉 board", flush=True)
+            return
 
         if old_board is not None:
-            # 用 silence + reset=True 清空舊緩衝區，再更新 semitones
-            silence = np.zeros((2, 4096), dtype=np.float32)
-            old_board(silence, self.sample_rate, reset=True)
             old_board[0].semitones = n
             self._pitch_board = old_board
         else:
             self._pitch_board = pedalboard.Pedalboard([pedalboard.PitchShift(semitones=n)])
+
+        self._pitch_reset_next = True   # 第一個 chunk 用 reset=True 初始化
+        self._pitch_debug_count = 10    # 接下來印 10 個 callback
+        print(f"[PitchShift] board 設定完成，semitones={n}，等待 callback", flush=True)
 
     def get_position_ratio(self) -> float:
         if self._length == 0:
@@ -178,12 +182,19 @@ class AudioEngine(QObject):
 
         board = self._pitch_board
         if board is not None:
-            out = board(mixed.T, self.sample_rate, reset=False)  # (2, N)，N 可能 < frames
+            do_reset = self._pitch_reset_next
+            self._pitch_reset_next = False
+            out = board(mixed.T, self.sample_rate, reset=do_reset)  # (2, N)
             n = out.shape[1]
+
+            if self._pitch_debug_count > 0:
+                self._pitch_debug_count -= 1
+                print(f"[CB] pos={self._position} frames={frames} reset={do_reset} "
+                      f"in={mixed.shape} out=({n},2)", flush=True)
+
             if n >= frames:
                 mixed = out.T[:frames]
             else:
-                # 初始緩衝期輸出樣本不足，零補到 frames 避免 shape mismatch
                 buf = np.zeros((frames, 2), dtype=np.float32)
                 if n > 0:
                     buf[:n] = out.T
