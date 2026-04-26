@@ -3,6 +3,7 @@
 AudioEngine：多軌同步播放，支援靜音、獨奏、音量、播放速度與移調倍率，低延遲 sounddevice callback 混音。
 SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
 """
+import time
 import threading
 import numpy as np
 import sounddevice as sd
@@ -118,10 +119,14 @@ class AudioEngine(QObject):
         self._pitch_shifter = StreamingPitchShifter(n)
 
         # 背景高品質處理
+        t0 = time.perf_counter()
+        n_tracks = len(self.tracks)
+        total_sec = sum(t.length / t.sample_rate for t in self.tracks) / n_tracks if self.tracks else 0
+        print(f"[pitch] 開始移調 {n:+d} 半音，{n_tracks} 軌，平均 {total_sec:.1f}s")
         self.pitch_processing_changed.emit(True)
-        threading.Thread(target=self._bg_pitch, args=(n,), daemon=True).start()
+        threading.Thread(target=self._bg_pitch, args=(n, t0), daemon=True).start()
 
-    def _bg_pitch(self, n: int):
+    def _bg_pitch(self, n: int, t0: float):
         """
         背景執行緒：每聲道獨立執行緒（4軌×2聲道=8執行緒），
         用 librosa（純 numpy，釋放 GIL，真多核平行）做高品質移調。
@@ -131,16 +136,21 @@ class AudioEngine(QObject):
             sr = self.sample_rate
             n_tracks = len(self.tracks)
             results: dict[tuple[int, int], np.ndarray] = {}
+            ch_times: dict[tuple[int, int], float] = {}
 
             def _process_ch(ti: int, ch: int):
                 if self._pitch_n != n:
                     return
                 orig = self._orig_audios.get(ti)
                 mono = (orig[:, ch] if orig is not None else self.tracks[ti].audio[:, ch])
+                t_ch = time.perf_counter()
                 try:
                     shifted = librosa.effects.pitch_shift(
                         mono.astype(np.float32), sr=sr, n_steps=float(n)
                     )
+                    elapsed_ch = time.perf_counter() - t_ch
+                    ch_times[(ti, ch)] = elapsed_ch
+                    print(f"[pitch]   軌{ti} ch{ch} 完成，耗時 {elapsed_ch:.2f}s")
                     if self._pitch_n == n:
                         results[(ti, ch)] = shifted
                 except Exception as e:
@@ -158,6 +168,7 @@ class AudioEngine(QObject):
                 t.join()
 
             if self._pitch_n != n:
+                print(f"[pitch] 已中途取消（使用者換調）")
                 return
 
             new_audios: list[np.ndarray] = []
@@ -168,9 +179,12 @@ class AudioEngine(QObject):
                 new_audios.append(np.stack([l, r], axis=1).astype(np.float32))
 
             self._pending_switch = new_audios
+            total_elapsed = time.perf_counter() - t0
+            print(f"[pitch] 全部完成，總耗時 {total_elapsed:.2f}s，切換至高品質版本")
             QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
         except Exception as e:
-            print(f"[pitch bg] error: {e}")
+            total_elapsed = time.perf_counter() - t0
+            print(f"[pitch bg] error（耗時 {total_elapsed:.2f}s）: {e}")
             if self._pitch_n == n:
                 QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
 
