@@ -168,25 +168,39 @@ music-splitter/
 
 ## 開發階段
 
-### Phase 1：核心功能（MVP）
-- [ ] 建立 PySide6 主視窗與拖曳上傳
-- [ ] 整合 Demucs 分源（背景執行緒 + 進度回報）
-- [ ] 波形圖顯示（QPainter 自訂 widget）
-- [ ] 整體播放鈕 + 進度條（seek 功能）
-- [ ] 整體音量滑桿
-- [ ] 各音軌獨立播放鈕（獨立播放）
-- [ ] 各音軌音量滑桿（即時增益）
-- [ ] 靜音（M）/ 獨奏（S）按鈕
-- [ ] 各音軌下載（MP3 320kbps）
-- [ ] 整體混音下載（MP3 320kbps）
+### Phase 1：核心功能（MVP）✅ 已完成
+- [x] 建立 PySide6 主視窗與拖曳上傳
+- [x] 整合 Demucs 分源（背景執行緒 + 進度回報）
+- [x] 波形圖顯示（QPainter 自訂 widget）
+- [x] 整體播放鈕 + 進度條（seek 功能）
+- [x] 整體音量滑桿
+- [x] 各音軌獨立播放鈕（獨立播放）
+- [x] 各音軌音量滑桿（即時增益）
+- [x] 靜音（M）/ 獨奏（S）按鈕
+- [x] 各音軌下載（MP3 320kbps）
+- [x] 整體混音下載（MP3 320kbps）
 
 ### Phase 2：完善體驗
+- [x] BPM 自動偵測（分源後優先用鼓軌，無鼓退回原始混音）
+- [x] 調性自動偵測（chromagram）
+- [x] 即時移調（sounddevice callback 內套用 pedalboard RubberBand）
+  - 兩段式：StreamingPitchShifter（相位聲碼器）立即預覽 → 背景 HQ 分批替換
+  - 分批策略：前 18s 每塊 2s（快速響應），之後每塊 20s
+  - 每軌獨立執行緒，各自依序處理所有區塊
+  - 靜音偵測：RMS < −80 dB 跳過 pedalboard 加速
+  - 調性選單動態產生（偵測調性居中，±8 半音，升記號往上 / 降記號往下）
+- [x] 播放速度調整（sounddevice output sample rate 倍率）
+- [x] MIDI 分析（FFT 自相關音高偵測 + music21 節奏量化）
+- [x] 五線譜（music21 + verovio SVG）
+- [x] 簡譜（matplotlib PNG）
+- [x] 節拍器（BPM 同步）
 - [ ] 卡拉 OK 快捷模式（一鍵靜音人聲並匯出）
 - [ ] 批次處理多首歌曲
 
 ### Phase 3：打包發布
-- [ ] PyInstaller 打包成 .exe
-- [ ] 自動下載 Demucs 模型（首次啟動）
+- [x] PyInstaller 打包成 .exe（build.bat）
+- [x] 自動下載 Demucs 模型（首次啟動）
+- [x] 一鍵安裝腳本（setup.bat）
 
 ---
 
