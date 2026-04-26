@@ -122,39 +122,53 @@ class AudioEngine(QObject):
         threading.Thread(target=self._bg_pitch, args=(n,), daemon=True).start()
 
     def _bg_pitch(self, n: int):
-        """背景執行緒：所有軌道同時平行處理（各自獨立 Pedalboard），完成後推送原子切換。"""
+        """
+        背景執行緒：每聲道獨立執行緒（4軌×2聲道=8執行緒），
+        用 librosa（純 numpy，釋放 GIL，真多核平行）做高品質移調。
+        """
         try:
-            from pedalboard import Pedalboard, PitchShift
+            import librosa
             sr = self.sample_rate
             n_tracks = len(self.tracks)
-            new_audios: list[np.ndarray | None] = [None] * n_tracks
+            results: dict[tuple[int, int], np.ndarray] = {}
 
-            def _process_one(i: int, track):
+            def _process_ch(ti: int, ch: int):
                 if self._pitch_n != n:
                     return
-                orig = self._orig_audios.get(i)
-                if orig is None:
-                    new_audios[i] = track.audio
-                    return
+                orig = self._orig_audios.get(ti)
+                mono = (orig[:, ch] if orig is not None else self.tracks[ti].audio[:, ch])
                 try:
-                    b = Pedalboard([PitchShift(semitones=float(n))])
-                    shifted = b(orig.T.astype(np.float32), sr).T.astype(np.float32)
+                    shifted = librosa.effects.pitch_shift(
+                        mono.astype(np.float32), sr=sr, n_steps=float(n)
+                    )
                     if self._pitch_n == n:
-                        new_audios[i] = shifted
+                        results[(ti, ch)] = shifted
                 except Exception as e:
-                    print(f"[pitch bg track {i}]: {e}")
-                    new_audios[i] = orig  # 處理失敗時退回原音
+                    print(f"[pitch bg ({ti},{ch})]: {e}")
+                    results[(ti, ch)] = mono  # 失敗退回原音
 
-            threads = [threading.Thread(target=_process_one, args=(i, t), daemon=True)
-                       for i, t in enumerate(self.tracks)]
+            threads = [
+                threading.Thread(target=_process_ch, args=(ti, ch), daemon=True)
+                for ti in range(n_tracks)
+                for ch in range(2)
+            ]
             for t in threads:
                 t.start()
             for t in threads:
                 t.join()
 
-            if self._pitch_n == n and all(a is not None for a in new_audios):
-                self._pending_switch = new_audios  # type: ignore[assignment]
-                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
+            if self._pitch_n != n:
+                return
+
+            new_audios: list[np.ndarray] = []
+            for ti in range(n_tracks):
+                l, r = results.get((ti, 0)), results.get((ti, 1))
+                if l is None or r is None:
+                    return
+                new_audios.append(np.stack([l, r], axis=1).astype(np.float32))
+
+            self._pending_switch = new_audios
+            QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
         except Exception as e:
             print(f"[pitch bg] error: {e}")
             if self._pitch_n == n:
