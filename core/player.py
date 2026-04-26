@@ -118,50 +118,60 @@ class AudioEngine(QObject):
         # 即時預覽
         self._pitch_shifter = StreamingPitchShifter(n)
 
-        # 背景高品質處理
+        # 背景高品質處理：只從當前播放位置往後處理，縮短處理量
         t0 = time.perf_counter()
+        process_start = self._position
         n_tracks = len(self.tracks)
-        total_sec = sum(t.length / t.sample_rate for t in self.tracks) / n_tracks if self.tracks else 0
-        print(f"[pitch] 開始移調 {n:+d} 半音，{n_tracks} 軌，平均 {total_sec:.1f}s")
+        remaining_sec = (self._length - process_start) / self.sample_rate if self._length > 0 else 0
+        print(f"[pitch] 開始移調 {n:+d} 半音，{n_tracks} 軌，"
+              f"從 {process_start/self.sample_rate:.1f}s 起，剩餘 {remaining_sec:.1f}s 需處理")
         self.pitch_processing_changed.emit(True)
-        threading.Thread(target=self._bg_pitch, args=(n, t0), daemon=True).start()
+        threading.Thread(target=self._bg_pitch, args=(n, t0, process_start), daemon=True).start()
 
-    def _bg_pitch(self, n: int, t0: float):
+    def _bg_pitch(self, n: int, t0: float, process_start: int):
         """
-        背景執行緒：每聲道獨立執行緒（4軌×2聲道=8執行緒），
-        用 librosa（純 numpy，釋放 GIL，真多核平行）做高品質移調。
+        背景執行緒：每軌獨立 Pedalboard（RubberBand，高品質），平行處理。
+        只處理 process_start 之後的音頻，縮短等待時間。
         """
         try:
-            import librosa
+            from pedalboard import Pedalboard, PitchShift
             sr = self.sample_rate
             n_tracks = len(self.tracks)
-            results: dict[tuple[int, int], np.ndarray] = {}
-            ch_times: dict[tuple[int, int], float] = {}
+            new_audios: list[np.ndarray | None] = [None] * n_tracks
 
-            def _process_ch(ti: int, ch: int):
+            def _process_one(i: int, track):
                 if self._pitch_n != n:
                     return
-                orig = self._orig_audios.get(ti)
-                mono = (orig[:, ch] if orig is not None else self.tracks[ti].audio[:, ch])
-                t_ch = time.perf_counter()
+                orig = self._orig_audios.get(i)
+                if orig is None:
+                    new_audios[i] = track.audio
+                    return
                 try:
-                    shifted = librosa.effects.pitch_shift(
-                        mono.astype(np.float32), sr=sr, n_steps=float(n)
-                    )
-                    elapsed_ch = time.perf_counter() - t_ch
-                    ch_times[(ti, ch)] = elapsed_ch
-                    print(f"[pitch]   軌{ti} ch{ch} 完成，耗時 {elapsed_ch:.2f}s")
-                    if self._pitch_n == n:
-                        results[(ti, ch)] = shifted
-                except Exception as e:
-                    print(f"[pitch bg ({ti},{ch})]: {e}")
-                    results[(ti, ch)] = mono  # 失敗退回原音
+                    t_track = time.perf_counter()
+                    b = Pedalboard([PitchShift(semitones=float(n))])
+                    part = orig[process_start:].T.astype(np.float32)
+                    shifted_part = b(part, sr).T.astype(np.float32)
 
-            threads = [
-                threading.Thread(target=_process_ch, args=(ti, ch), daemon=True)
-                for ti in range(n_tracks)
-                for ch in range(2)
-            ]
+                    # 長度修正（pedalboard 可能多或少幾個 sample）
+                    expected = len(orig) - process_start
+                    if len(shifted_part) > expected:
+                        shifted_part = shifted_part[:expected]
+                    elif len(shifted_part) < expected:
+                        pad = np.zeros((expected - len(shifted_part), 2), dtype=np.float32)
+                        shifted_part = np.concatenate([shifted_part, pad])
+
+                    elapsed = time.perf_counter() - t_track
+                    print(f"[pitch]   軌{i} 完成，耗時 {elapsed:.2f}s")
+                    if self._pitch_n == n:
+                        # 前段保留原音（不影響已播過的部分），後段換 HQ
+                        full = np.concatenate([orig[:process_start], shifted_part], axis=0)
+                        new_audios[i] = full.astype(np.float32)
+                except Exception as e:
+                    print(f"[pitch bg track {i}]: {e}")
+                    new_audios[i] = orig
+
+            threads = [threading.Thread(target=_process_one, args=(i, t), daemon=True)
+                       for i, t in enumerate(self.tracks)]
             for t in threads:
                 t.start()
             for t in threads:
@@ -171,17 +181,11 @@ class AudioEngine(QObject):
                 print(f"[pitch] 已中途取消（使用者換調）")
                 return
 
-            new_audios: list[np.ndarray] = []
-            for ti in range(n_tracks):
-                l, r = results.get((ti, 0)), results.get((ti, 1))
-                if l is None or r is None:
-                    return
-                new_audios.append(np.stack([l, r], axis=1).astype(np.float32))
-
-            self._pending_switch = new_audios
-            total_elapsed = time.perf_counter() - t0
-            print(f"[pitch] 全部完成，總耗時 {total_elapsed:.2f}s，切換至高品質版本")
-            QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
+            if all(a is not None for a in new_audios):
+                self._pending_switch = new_audios  # type: ignore[assignment]
+                total_elapsed = time.perf_counter() - t0
+                print(f"[pitch] 全部完成，總耗時 {total_elapsed:.2f}s，切換至高品質版本")
+                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
         except Exception as e:
             total_elapsed = time.perf_counter() - t0
             print(f"[pitch bg] error（耗時 {total_elapsed:.2f}s）: {e}")
