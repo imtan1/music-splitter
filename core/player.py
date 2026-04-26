@@ -122,26 +122,38 @@ class AudioEngine(QObject):
         threading.Thread(target=self._bg_pitch, args=(n,), daemon=True).start()
 
     def _bg_pitch(self, n: int):
-        """背景執行緒：用 pedalboard RubberBand 離線處理，完成後推送原子切換。"""
+        """背景執行緒：所有軌道同時平行處理（各自獨立 Pedalboard），完成後推送原子切換。"""
         try:
             from pedalboard import Pedalboard, PitchShift
-            board = Pedalboard([PitchShift(semitones=float(n))])
             sr = self.sample_rate
-            new_audios: list[np.ndarray] = []
+            n_tracks = len(self.tracks)
+            new_audios: list[np.ndarray | None] = [None] * n_tracks
 
-            for i, track in enumerate(self.tracks):
+            def _process_one(i: int, track):
                 if self._pitch_n != n:
-                    return              # 使用者已改調，放棄本次處理
+                    return
                 orig = self._orig_audios.get(i)
                 if orig is None:
-                    new_audios.append(track.audio)
-                    continue
-                # pedalboard 需要 (channels, samples) float32
-                shifted = board(orig.T.astype(np.float32), sr).T.astype(np.float32)
-                new_audios.append(shifted)
+                    new_audios[i] = track.audio
+                    return
+                try:
+                    b = Pedalboard([PitchShift(semitones=float(n))])
+                    shifted = b(orig.T.astype(np.float32), sr).T.astype(np.float32)
+                    if self._pitch_n == n:
+                        new_audios[i] = shifted
+                except Exception as e:
+                    print(f"[pitch bg track {i}]: {e}")
+                    new_audios[i] = orig  # 處理失敗時退回原音
 
-            if self._pitch_n == n:
-                self._pending_switch = new_audios  # callback 會原子套用
+            threads = [threading.Thread(target=_process_one, args=(i, t), daemon=True)
+                       for i, t in enumerate(self.tracks)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            if self._pitch_n == n and all(a is not None for a in new_audios):
+                self._pending_switch = new_audios  # type: ignore[assignment]
                 QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
         except Exception as e:
             print(f"[pitch bg] error: {e}")
