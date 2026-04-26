@@ -115,18 +115,16 @@ class MetronomeChannel(QWidget):
         self._vol_lbl.setText(f"{value}%")
 
 
-ALL_KEYS = [
-    '自動偵測',
-    'C', 'D', 'E', 'F', 'G', 'A', 'B',
-    'C#', 'Db', 'Eb', 'F#', 'Gb', 'Ab', 'Bb',
-    'Cm', 'Dm', 'Em', 'Fm', 'Gm', 'Am', 'Bm',
-]
+# 調性選擇範圍：偵測調性居中，往上/往下各 8 半音
+_PITCH_RANGE = 8
+# 半音 → 音名：往上用升記號，往下用降記號
+_PC_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+_PC_FLAT  = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
 
-# 調性根音半音數（分大調/小調共用根音 pitch class）
+# 調性字串 → pitch class（僅供偵測結果轉換用）
 KEY_PC: dict[str, int] = {
-    'C':0,'C#':1,'Db':1,'D':2,'Eb':3,'E':4,
-    'F':5,'F#':6,'Gb':6,'G':7,'Ab':8,'A':9,'Bb':10,'B':11,
-    'Cm':0,'Dm':2,'Em':4,'Fm':5,'Gm':7,'Am':9,'Bm':11,
+    'C':0,'C#':1,'Db':1,'D':2,'D#':3,'Eb':3,'E':4,
+    'F':5,'F#':6,'Gb':6,'G':7,'G#':8,'Ab':8,'A':9,'A#':10,'Bb':10,'B':11,
 }
 
 
@@ -189,11 +187,8 @@ class ResultView(QWidget):
         self._tempo_spin.valueChanged.disconnect()
         self._tempo_spin.setValue(max(40, min(240, int(tempo))))
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
-        display_key = key if key in ALL_KEYS else '自動偵測'
-        self._base_key_pc = KEY_PC.get(display_key)   # 記錄原始調性根音
-        self._key_combo.blockSignals(True)
-        self._key_combo.setCurrentText(display_key)
-        self._key_combo.blockSignals(False)
+        base_pc = KEY_PC.get(key, 0)
+        self._build_key_combo(base_pc, key or 'C')
 
         self._source_title = source_name or ''
 
@@ -320,8 +315,8 @@ class ResultView(QWidget):
 
         info_row.addWidget(QLabel("調性："))
         self._key_combo = QComboBox()
-        self._key_combo.addItems(ALL_KEYS)
-        self._key_combo.setFixedWidth(110)
+        self._key_combo.setFixedWidth(90)
+        self._key_combo.setEnabled(False)
         self._key_combo.setToolTip("選擇調性後所有音軌將自動移調")
         self._key_combo.currentTextChanged.connect(self._on_key_changed)
         info_row.addWidget(self._key_combo)
@@ -482,21 +477,28 @@ class ResultView(QWidget):
             return
         self._apply_pitch_shift()
 
+    def _build_key_combo(self, base_pc: int, base_name: str = 'C'):
+        """以偵測調性為中心，動態產生 ±_PITCH_RANGE 半音的選項。"""
+        self._key_combo.blockSignals(True)
+        self._key_combo.clear()
+        for offset in range(_PITCH_RANGE, -_PITCH_RANGE - 1, -1):
+            pc = (base_pc + offset) % 12
+            if offset == 0:
+                name = base_name
+            elif offset > 0:
+                name = _PC_SHARP[pc]
+            else:
+                name = _PC_FLAT[pc]
+            self._key_combo.addItem(name)
+        self._key_combo.setCurrentIndex(_PITCH_RANGE)   # 中心 = 偵測調性 = 0 移調
+        self._key_combo.setEnabled(True)
+        self._key_combo.blockSignals(False)
+
     def _apply_pitch_shift(self):
-        """計算半音差並告知 engine，callback 內即時套用 pedalboard PitchShift。"""
+        """偵測調性為基準，index 距中心的距離即為半音數（正=升，負=降）。"""
         if not self._tracks:
             return
-        new_key = self._key_combo.currentText()
-        new_pc = KEY_PC.get(new_key)
-        if new_pc is None or self._base_key_pc is None:
-            return
-
-        n_steps = int(new_pc - self._base_key_pc)
-        if n_steps > 6:
-            n_steps -= 12
-        elif n_steps < -6:
-            n_steps += 12
-
+        n_steps = _PITCH_RANGE - self._key_combo.currentIndex()
         self._engine.set_pitch_semitones(n_steps)
 
     def _on_tempo_changed(self, value: int):

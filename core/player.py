@@ -3,6 +3,7 @@
 AudioEngine：多軌同步播放，支援靜音、獨奏、音量、播放速度與移調倍率，低延遲 sounddevice callback 混音。
 SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
 """
+import math
 import time
 import threading
 import numpy as np
@@ -48,7 +49,9 @@ class AudioEngine(QObject):
         self._pitch_shifter: StreamingPitchShifter | None = None
         self._pitch_n: int = 0
         self._orig_audios: dict[int, np.ndarray] = {}   # track index → 原始音頻
-        self._pending_switch: list[np.ndarray] | None = None  # 離線處理完成後的原子切換
+        self._hq_process_start: int = 0  # position where HQ processing started
+        self._hq_end: int = 0            # min of per-track hq_ends (callback boundary)
+        self._hq_ends: list[int] = []    # per-track HQ progress
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -63,7 +66,9 @@ class AudioEngine(QObject):
         self._pitch_n = 0
         self._pitch_shifter = None
         self._orig_audios.clear()
-        self._pending_switch = None
+        self._hq_process_start = 0
+        self._hq_end = 0
+        self._hq_ends = []
         self.tracks = tracks
         if tracks:
             self.sample_rate = tracks[0].sample_rate
@@ -93,12 +98,13 @@ class AudioEngine(QObject):
 
     def set_pitch_semitones(self, n: int):
         """
-        兩段式移調：
+        兩段式分批移調：
         1. 立刻建立 StreamingPitchShifter 提供即時（低品質）預覽
-        2. 同步在背景用 pedalboard RubberBand 做高品質離線處理，完成後自動切換
+        2. 背景每 20 秒一塊順序處理（每塊內各軌平行），逐塊寫入 track.audio
         """
         self._pitch_n = n
-        self._pending_switch = None         # 取消未生效的上一次切換
+        self._hq_process_start = 0
+        self._hq_end = 0
 
         if n == 0:
             self._pitch_shifter = None
@@ -112,65 +118,90 @@ class AudioEngine(QObject):
         for i, track in enumerate(self.tracks):
             if i not in self._orig_audios:
                 self._orig_audios[i] = track.audio
-            # 確保 track.audio 指向原始版（避免前次處理結果被再次移調）
-            track.audio = self._orig_audios[i]
+            # 每次換調建立可寫入的副本，供背景逐塊 in-place 寫入 HQ 結果
+            track.audio = self._orig_audios[i].copy()
 
-        # 即時預覽
+        process_start = self._position
+        self._hq_process_start = process_start
+        self._hq_end = process_start
+        self._hq_ends = [process_start] * len(self.tracks)
+
+        # 即時預覽（在 HQ 尚未覆蓋的區段使用）
         self._pitch_shifter = StreamingPitchShifter(n)
 
-        # 背景高品質處理：只從當前播放位置往後處理，縮短處理量
-        t0 = time.perf_counter()
-        process_start = self._position
         n_tracks = len(self.tracks)
         remaining_sec = (self._length - process_start) / self.sample_rate if self._length > 0 else 0
         print(f"[pitch] 開始移調 {n:+d} 半音，{n_tracks} 軌，"
               f"從 {process_start/self.sample_rate:.1f}s 起，剩餘 {remaining_sec:.1f}s 需處理")
         self.pitch_processing_changed.emit(True)
+        t0 = time.perf_counter()
         threading.Thread(target=self._bg_pitch, args=(n, t0, process_start), daemon=True).start()
 
     def _bg_pitch(self, n: int, t0: float, process_start: int):
         """
-        背景執行緒：每軌獨立 Pedalboard（RubberBand，高品質），平行處理。
-        只處理 process_start 之後的音頻，縮短等待時間。
+        背景執行緒：每軌各自一條執行緒，各自依序處理所有區塊。
+        _hq_end = min(per-track hq_ends)，callback 以此為 HQ/PV 切換邊界。
         """
         try:
             from pedalboard import Pedalboard, PitchShift
             sr = self.sample_rate
-            n_tracks = len(self.tracks)
-            new_audios: list[np.ndarray | None] = [None] * n_tracks
+            SMALL_SEC  = 2
+            SMALL_SECS = 18
+            LARGE_SEC  = 20
 
-            def _process_one(i: int, track):
-                if self._pitch_n != n:
-                    return
-                orig = self._orig_audios.get(i)
-                if orig is None:
-                    new_audios[i] = track.audio
-                    return
-                try:
-                    t_track = time.perf_counter()
-                    b = Pedalboard([PitchShift(semitones=float(n))])
-                    part = orig[process_start:].T.astype(np.float32)
-                    shifted_part = b(part, sr).T.astype(np.float32)
+            chunks: list[tuple[int, int]] = []
+            pos = process_start
+            small_boundary = process_start + SMALL_SECS * sr
+            while pos < min(small_boundary, self._length):
+                end = min(pos + SMALL_SEC * sr, small_boundary, self._length)
+                chunks.append((pos, end))
+                pos = end
+            while pos < self._length:
+                end = min(pos + LARGE_SEC * sr, self._length)
+                chunks.append((pos, end))
+                pos = end
+            n_chunks = len(chunks)
+            print(f"[pitch] 共 {n_chunks} 塊（前 {SMALL_SECS}s 每塊 {SMALL_SEC}s，"
+                  f"之後每塊 {LARGE_SEC}s），各軌獨立執行緒")
 
-                    # 長度修正（pedalboard 可能多或少幾個 sample）
-                    expected = len(orig) - process_start
-                    if len(shifted_part) > expected:
-                        shifted_part = shifted_part[:expected]
-                    elif len(shifted_part) < expected:
-                        pad = np.zeros((expected - len(shifted_part), 2), dtype=np.float32)
-                        shifted_part = np.concatenate([shifted_part, pad])
+            def _process_track(track_idx: int, track):
+                orig = self._orig_audios.get(track_idx)
+                for chunk_idx, (c_start, c_end) in enumerate(chunks):
+                    if self._pitch_n != n:
+                        return
+                    try:
+                        if orig is None:
+                            self._hq_ends[track_idx] = c_end
+                            self._hq_end = min(self._hq_ends)
+                            continue
 
-                    elapsed = time.perf_counter() - t_track
-                    print(f"[pitch]   軌{i} 完成，耗時 {elapsed:.2f}s")
-                    if self._pitch_n == n:
-                        # 前段保留原音（不影響已播過的部分），後段換 HQ
-                        full = np.concatenate([orig[:process_start], shifted_part], axis=0)
-                        new_audios[i] = full.astype(np.float32)
-                except Exception as e:
-                    print(f"[pitch bg track {i}]: {e}")
-                    new_audios[i] = orig
+                        part = orig[c_start:c_end].astype(np.float32)
+                        if float(np.sqrt(np.mean(part ** 2))) < 1e-4:
+                            print(f"[pitch] 軌{track_idx} chunk {chunk_idx+1}/{n_chunks} 靜音，跳過")
+                            track.audio[c_start:c_end] = part
+                        else:
+                            t_chunk = time.perf_counter()
+                            b = Pedalboard([PitchShift(semitones=float(n))])
+                            shifted = b(part.T, sr).T.astype(np.float32)
+                            expected = c_end - c_start
+                            if len(shifted) > expected:
+                                shifted = shifted[:expected]
+                            elif len(shifted) < expected:
+                                pad = np.zeros((expected - len(shifted), 2), dtype=np.float32)
+                                shifted = np.concatenate([shifted, pad])
+                            track.audio[c_start:c_end] = shifted
+                            elapsed = time.perf_counter() - t_chunk
+                            print(f"[pitch] 軌{track_idx} chunk {chunk_idx+1}/{n_chunks}: "
+                                  f"{c_start/sr:.1f}s–{c_end/sr:.1f}s 完成，耗時 {elapsed:.2f}s")
+                    except Exception as e:
+                        print(f"[pitch bg 軌{track_idx} chunk {chunk_idx+1}]: {e}")
+                        if orig is not None:
+                            track.audio[c_start:c_end] = orig[c_start:c_end]
 
-            threads = [threading.Thread(target=_process_one, args=(i, t), daemon=True)
+                    self._hq_ends[track_idx] = c_end
+                    self._hq_end = min(self._hq_ends)
+
+            threads = [threading.Thread(target=_process_track, args=(i, t), daemon=True)
                        for i, t in enumerate(self.tracks)]
             for t in threads:
                 t.start()
@@ -178,14 +209,12 @@ class AudioEngine(QObject):
                 t.join()
 
             if self._pitch_n != n:
-                print(f"[pitch] 已中途取消（使用者換調）")
+                print(f"[pitch] 已中途取消")
                 return
 
-            if all(a is not None for a in new_audios):
-                self._pending_switch = new_audios  # type: ignore[assignment]
-                total_elapsed = time.perf_counter() - t0
-                print(f"[pitch] 全部完成，總耗時 {total_elapsed:.2f}s，切換至高品質版本")
-                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
+            total_elapsed = time.perf_counter() - t0
+            print(f"[pitch] 全部完成，總耗時 {total_elapsed:.2f}s")
+            QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
         except Exception as e:
             total_elapsed = time.perf_counter() - t0
             print(f"[pitch bg] error（耗時 {total_elapsed:.2f}s）: {e}")
@@ -194,6 +223,7 @@ class AudioEngine(QObject):
 
     @Slot()
     def _on_bg_pitch_done(self):
+        self._pitch_shifter = None   # 全部 HQ，不再需要即時預覽
         self.pitch_processing_changed.emit(False)
 
 
@@ -252,26 +282,25 @@ class AudioEngine(QObject):
     # ------------------------------------------------------------------
 
     def _callback(self, outdata: np.ndarray, frames: int, time, status):
-        # 離線移調完成 → 原子切換 track.audio + 停用即時預覽
-        switch = self._pending_switch
-        if switch is not None:
-            self._pending_switch = None
-            self._pitch_shifter = None
-            for track, new_audio in zip(self.tracks, switch):
-                track.audio = new_audio
-
         mixed = np.zeros((frames, 2), dtype=np.float32)
         any_solo = any(t.solo for t in self.tracks)
         pos = self._position
+        hq_end = self._hq_end   # snapshot：HQ 已覆蓋到此位置
 
-        for track in self.tracks:
+        for i, track in enumerate(self.tracks):
             if track.muted:
                 continue
             if any_solo and not track.solo:
                 continue
 
             end = pos + frames
-            chunk = track.audio[pos:end]
+            if pos < hq_end:
+                # 所有軌均已 HQ，直接讀 track.audio
+                chunk = track.audio[pos:end]
+            else:
+                # 非 HQ 區段：讀原始音頻交給 PV，避免進度較快的軌被二次移調
+                orig = self._orig_audios.get(i)
+                chunk = orig[pos:end] if orig is not None else track.audio[pos:end]
             actual = len(chunk)
 
             if actual == 0:
@@ -284,8 +313,9 @@ class AudioEngine(QObject):
         mixed *= self._master_volume
         np.clip(mixed, -1.0, 1.0, out=mixed)
 
+        # 只在尚未 HQ 覆蓋的區段套用即時 PV 預覽
         shifter = self._pitch_shifter
-        if shifter is not None:
+        if shifter is not None and pos >= hq_end:
             mixed = shifter.process(mixed)
             np.clip(mixed, -1.0, 1.0, out=mixed)
 
@@ -301,6 +331,7 @@ class AudioEngine(QObject):
         from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(self, '_cleanup_after_finish', Qt.QueuedConnection)
 
+    @Slot()
     def _cleanup_after_finish(self):
         """排回主執行緒執行：停 timer、關 stream、發出訊號。"""
         self._timer.stop()
