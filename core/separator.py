@@ -4,9 +4,11 @@
 分源完成後依各軌 onset strength 自動選擇最佳音源做 BPM 偵測，並對原始混音做調性偵測。
 """
 import os
+import threading
 import numpy as np
 import torch
 import soundfile as sf
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
@@ -131,24 +133,56 @@ class SeparatorThread(QThread):
             original_wav_np = wav.numpy()  # 正規化前保存，供 BPM/key 分析備用
 
             ref = wav.mean(0)
-            wav = (wav - ref.mean()) / ref.std()
-            wav = wav.unsqueeze(0).to(device)  # (1, C, T)
+            wav_norm = (wav - ref.mean()) / ref.std()
+            wav_norm = wav_norm.unsqueeze(0).to(device)  # (1, C, T)
 
-            self.progress.emit("分源中（可能需要幾分鐘）...", 20)
+            self.progress.emit("分源中（多核心平行處理）...", 20)
 
-            with torch.no_grad():
-                sources = apply_model(
-                    model,
-                    wav,
-                    device=device,
-                    progress=False,
-                    num_workers=0,
-                )
-            # sources shape: (1, num_stems, channels, samples)
-            sources = sources[0]  # (num_stems, channels, samples)
+            # ── 切塊平行分源 ──────────────────────────────────────
+            T = wav_norm.shape[-1]
+            N = min(10, os.cpu_count() or 4)
+            context = int(model.samplerate * 2)   # 2 秒 context，避免邊界斷點
+            chunk_size = T // N
 
-            # Re-scale back
+            chunks_meta = []
+            for i in range(N):
+                start     = i * chunk_size
+                end       = start + chunk_size if i < N - 1 else T
+                ctx_start = max(0, start - context)
+                ctx_end   = min(T, end   + context)
+                left_trim  = start - ctx_start
+                right_trim = ctx_end - end
+                chunks_meta.append((ctx_start, ctx_end, left_trim, right_trim))
+
+            completed = [0]
+            lock = threading.Lock()
+
+            def _process_chunk(meta):
+                ctx_start, ctx_end, left_trim, right_trim = meta
+                chunk = wav_norm[:, :, ctx_start:ctx_end]
+                with torch.no_grad():
+                    out = apply_model(model, chunk, device=device,
+                                      progress=False, num_workers=0)
+                out = out[0]  # (num_stems, C, chunk_len)
+                r = out.shape[-1] - right_trim if right_trim > 0 else None
+                out = out[:, :, left_trim:r]
+                with lock:
+                    completed[0] += 1
+                    pct = 20 + completed[0] * 55 // N
+                    self.progress.emit(f"分源中 ({completed[0]}/{N} 塊)...", pct)
+                return out
+
+            orig_threads = torch.get_num_threads()
+            torch.set_num_threads(max(1, orig_threads // N))
+            try:
+                with ThreadPoolExecutor(max_workers=N) as pool:
+                    chunk_results = list(pool.map(_process_chunk, chunks_meta))
+            finally:
+                torch.set_num_threads(orig_threads)
+
+            sources = torch.cat(chunk_results, dim=-1)  # (num_stems, C, T)
             sources = sources * ref.std() + ref.mean()
+            # ─────────────────────────────────────────────────────
 
             result = {}
             model_stems = model.sources  # e.g. ['drums','bass','other','vocals','guitar','piano']
