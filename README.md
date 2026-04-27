@@ -48,7 +48,7 @@ pip install -r requirements.txt
 ```bash
 python main.py
 ```
-或雙擊 **`啟動.bat`**。
+或雙擊 **`start.bat`**。
 
 > **首次執行**會自動下載 Demucs `htdemucs_6s` 模型（約 300 MB），請確保網路連線正常。
 
