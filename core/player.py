@@ -49,6 +49,7 @@ class AudioEngine(QObject):
         self._pitch_shifter: StreamingPitchShifter | None = None
         self._pitch_n: int = 0
         self.use_librosa_pitch: bool = False  # True = 使用 librosa HQ（較快）
+        self.max_parallel_pitch: int = 6     # 最多幾軌同時移調（測試用，預設全部）
         self._orig_audios: dict[int, np.ndarray] = {}   # track index → 原始音頻
         self._hq_process_start: int = 0  # position where HQ processing started
         self._hq_end: int = 0            # min of per-track hq_ends (callback boundary)
@@ -203,7 +204,13 @@ class AudioEngine(QObject):
                     self._hq_ends[track_idx] = c_end
                     self._hq_end = min(self._hq_ends)
 
-            threads = [threading.Thread(target=_process_track, args=(i, t), daemon=True)
+            sem = threading.Semaphore(max(1, self.max_parallel_pitch))
+
+            def _process_track_limited(track_idx, track):
+                with sem:
+                    _process_track(track_idx, track)
+
+            threads = [threading.Thread(target=_process_track_limited, args=(i, t), daemon=True)
                        for i, t in enumerate(self.tracks)]
             for t in threads:
                 t.start()
@@ -289,7 +296,13 @@ class AudioEngine(QObject):
                     self._hq_ends[track_idx] = c_end
                     self._hq_end = min(self._hq_ends)
 
-            threads = [threading.Thread(target=_process_track, args=(i, t), daemon=True)
+            sem = threading.Semaphore(max(1, self.max_parallel_pitch))
+
+            def _process_track_limited(track_idx, track):
+                with sem:
+                    _process_track(track_idx, track)
+
+            threads = [threading.Thread(target=_process_track_limited, args=(i, t), daemon=True)
                        for i, t in enumerate(self.tracks)]
             for t in threads:
                 t.start()
