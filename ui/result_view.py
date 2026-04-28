@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QSlider, QScrollArea, QFileDialog,
     QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QMetaObject, Slot
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from core.player import AudioEngine, TrackState, SingleTrackPlayer
 from core.mixer import mix_tracks
@@ -131,7 +131,8 @@ KEY_PC: dict[str, int] = {
 
 
 class ResultView(QWidget):
-    back_requested = Signal()   # 回主頁
+    back_requested     = Signal()         # 回主頁
+    _dl_master_done_sig = Signal(str, str)  # (error_msg, save_path)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +140,7 @@ class ResultView(QWidget):
         self._engine.position_changed.connect(self._on_position_changed)
         self._engine.playback_stopped.connect(self._on_playback_stopped)
         self._engine.pitch_processing_changed.connect(self._on_pitch_processing_changed)
+        self._dl_master_done_sig.connect(self._on_download_master_done)
 
         self._channels: list[TrackChannel] = []
         self._tracks: list[TrackState] = []
@@ -546,10 +548,9 @@ class ResultView(QWidget):
 
         self._dl_master_btn.setText("處理中...")
         self._dl_master_btn.setEnabled(False)
-        self._dl_master_error: str | None = None
-        self._dl_master_path = path
 
         def _work():
+            error = ''
             try:
                 master_vol = self._master_vol_slider.value() / 100.0
                 export_audios = {i: self._engine.get_export_audio(i)
@@ -563,18 +564,15 @@ class ResultView(QWidget):
                 )
                 export_mp3(audio, sr, path, bitrate="320k")
             except Exception as e:
-                self._dl_master_error = str(e)
-            QMetaObject.invokeMethod(self, '_on_download_master_done',
-                                     Qt.ConnectionType.QueuedConnection)
+                error = str(e)
+            self._dl_master_done_sig.emit(error, path)
 
         threading.Thread(target=_work, daemon=True).start()
 
-    @Slot()
-    def _on_download_master_done(self):
+    def _on_download_master_done(self, error: str, path: str):
         self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
         self._dl_master_btn.setEnabled(True)
-        if self._dl_master_error:
-            QMessageBox.critical(self, "匯出失敗", self._dl_master_error)
-            self._dl_master_error = None
+        if error:
+            QMessageBox.critical(self, "匯出失敗", error)
         else:
-            QMessageBox.information(self, "完成", f"已儲存至：\n{self._dl_master_path}")
+            QMessageBox.information(self, "完成", f"已儲存至：\n{path}")

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QSlider, QFileDialog, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal, QMetaObject, Slot
+from PySide6.QtCore import Qt, Signal
 
 from core.player import TrackState, SingleTrackPlayer
 from core.mixer import mix_single_track
@@ -20,6 +20,7 @@ class TrackChannel(QWidget):
     seek_requested    = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
     solo_play_started = Signal()        # 單軌播放開始，通知 ResultView 停掉其它來源
     position_changed  = Signal(float)   # 單軌播放進度，0.0 ~ 1.0
+    _dl_done          = Signal(str)     # 下載完成（錯誤訊息，空字串=成功）
 
     def __init__(self, track: TrackState, label: str, parent=None,
                  file_title: str = '', get_tempo=None, get_key=None, get_speed=None,
@@ -32,6 +33,7 @@ class TrackChannel(QWidget):
         self._get_key = get_key or (lambda: '自動偵測')
         self._get_speed = get_speed or (lambda: 1.0)
         self._get_export_audio = get_export_audio or (lambda: None)
+        self._dl_done.connect(self._on_download_done)
         self._solo_player = SingleTrackPlayer(self)
         self._solo_player.load(track)
         self._solo_player.playback_stopped.connect(self._on_solo_stopped)
@@ -191,24 +193,22 @@ class TrackChannel(QWidget):
 
         self.dl_btn.setText("...")
         self.dl_btn.setEnabled(False)
-        self._dl_error: str | None = None
 
         def _work():
+            error = ''
             try:
                 audio, sr = mix_single_track(self.track, speed=self._get_speed(),
                                              export_audio=self._get_export_audio())
                 export_mp3(audio, sr, path, bitrate="320k")
             except Exception as e:
-                self._dl_error = str(e)
-            QMetaObject.invokeMethod(self, '_on_download_done', Qt.ConnectionType.QueuedConnection)
+                error = str(e)
+            self._dl_done.emit(error)
 
         threading.Thread(target=_work, daemon=True).start()
 
-    @Slot()
-    def _on_download_done(self):
+    def _on_download_done(self, error: str):
         self.dl_btn.setText("⬇ MP3")
         self.dl_btn.setEnabled(True)
-        if self._dl_error:
+        if error:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "匯出失敗", self._dl_error)
-            self._dl_error = None
+            QMessageBox.critical(self, "匯出失敗", error)
