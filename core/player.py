@@ -227,20 +227,10 @@ class AudioEngine(QObject):
         self.pitch_processing_changed.emit(False)
 
     def get_export_audio(self, track_idx: int) -> np.ndarray:
-        """Download: apply full pitch shift synchronously from original audio."""
-        if self._pitch_n == 0 or track_idx not in self._orig_audios:
-            return self.tracks[track_idx].audio
-        from pedalboard import Pedalboard, PitchShift
-        orig = self._orig_audios[track_idx].astype(np.float32)
-        b = Pedalboard([PitchShift(semitones=float(self._pitch_n))])
-        shifted = b(orig.T, self.sample_rate).T.astype(np.float32)
-        expected = len(orig)
-        if len(shifted) > expected:
-            shifted = shifted[:expected]
-        elif len(shifted) < expected:
-            pad = np.zeros((expected - len(shifted), 2), dtype=np.float32)
-            shifted = np.concatenate([shifted, pad])
-        return shifted
+        """Return audio for export. Waits for background HQ processing to finish if needed."""
+        while self._pitch_shifter is not None:
+            time.sleep(0.05)
+        return self.tracks[track_idx].audio
 
     def get_position_ratio(self) -> float:
         if self._length == 0:
