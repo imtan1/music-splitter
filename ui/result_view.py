@@ -201,7 +201,8 @@ class ResultView(QWidget):
             tracks.append(track)
 
             ch = TrackChannel(track, label, self, file_title=file_title,
-                              get_tempo=self.get_tempo, get_key=self.get_key)
+                              get_tempo=self.get_tempo, get_key=self.get_key,
+                              get_speed=lambda: self._engine.speed)
             ch.mute_changed.connect(self._on_mute_changed)
             ch.solo_changed.connect(self._on_solo_changed)
             ch.seek_requested.connect(self._on_waveform_seek)
@@ -545,7 +546,12 @@ class ResultView(QWidget):
         self._dl_master_btn.setEnabled(False)
         try:
             master_vol = self._master_vol_slider.value() / 100.0
-            audio, sr = mix_tracks(self._tracks, master_volume=master_vol)
+            audio, sr = mix_tracks(
+                self._tracks,
+                master_volume=master_vol,
+                speed=self._engine.speed,
+                metronome_track=self._metronome_track,
+            )
             export_mp3(audio, sr, path, bitrate="320k")
             QMessageBox.information(self, "完成", f"已儲存至：\n{path}")
         except Exception as e:
