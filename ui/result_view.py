@@ -419,7 +419,6 @@ class ResultView(QWidget):
 
     def _on_pitch_processing_changed(self, processing: bool):
         self._pitch_status_lbl.setVisible(processing)
-        self._key_combo.setEnabled(not processing)
 
     def _on_playback_stopped(self):
         self._play_btn.setText("▶ 整體播放")
