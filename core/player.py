@@ -48,8 +48,6 @@ class AudioEngine(QObject):
         self._speed = 1.0           # 播放速度倍率，1.0 = 原速
         self._pitch_shifter: StreamingPitchShifter | None = None
         self._pitch_n: int = 0
-        self.use_librosa_pitch: bool = False  # True = 使用 librosa HQ（較快）
-        self.max_parallel_pitch: int = 6     # 最多幾軌同時移調（測試用，預設全部）
         self._orig_audios: dict[int, np.ndarray] = {}   # track index → 原始音頻
         self._hq_process_start: int = 0  # position where HQ processing started
         self._hq_end: int = 0            # min of per-track hq_ends (callback boundary)
@@ -137,8 +135,7 @@ class AudioEngine(QObject):
               f"從 {process_start/self.sample_rate:.1f}s 起，剩餘 {remaining_sec:.1f}s 需處理")
         self.pitch_processing_changed.emit(True)
         t0 = time.perf_counter()
-        bg_fn = self._bg_pitch_librosa if self.use_librosa_pitch else self._bg_pitch
-        threading.Thread(target=bg_fn, args=(n, t0, process_start), daemon=True).start()
+        threading.Thread(target=self._bg_pitch, args=(n, t0, process_start), daemon=True).start()
 
     def _bg_pitch(self, n: int, t0: float, process_start: int):
         """
@@ -204,13 +201,7 @@ class AudioEngine(QObject):
                     self._hq_ends[track_idx] = c_end
                     self._hq_end = min(self._hq_ends)
 
-            sem = threading.Semaphore(max(1, self.max_parallel_pitch))
-
-            def _process_track_limited(track_idx, track):
-                with sem:
-                    _process_track(track_idx, track)
-
-            threads = [threading.Thread(target=_process_track_limited, args=(i, t), daemon=True)
+            threads = [threading.Thread(target=_process_track, args=(i, t), daemon=True)
                        for i, t in enumerate(self.tracks)]
             for t in threads:
                 t.start()
@@ -227,98 +218,6 @@ class AudioEngine(QObject):
         except Exception as e:
             total_elapsed = time.perf_counter() - t0
             print(f"[pitch bg] error（耗時 {total_elapsed:.2f}s）: {e}")
-            if self._pitch_n == n:
-                QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
-
-    def _bg_pitch_librosa(self, n: int, t0: float, process_start: int):
-        """
-        背景執行緒（librosa 版）：phase vocoder 移調，速度比 RubberBand 快 5-10 倍。
-        結構與 _bg_pitch 完全一致，僅移調演算法不同。
-        """
-        try:
-            import librosa
-            sr = self.sample_rate
-            SMALL_SEC  = 2
-            SMALL_SECS = 18
-            LARGE_SEC  = 20
-
-            chunks: list[tuple[int, int]] = []
-            pos = process_start
-            small_boundary = process_start + SMALL_SECS * sr
-            while pos < min(small_boundary, self._length):
-                end = min(pos + SMALL_SEC * sr, small_boundary, self._length)
-                chunks.append((pos, end))
-                pos = end
-            while pos < self._length:
-                end = min(pos + LARGE_SEC * sr, self._length)
-                chunks.append((pos, end))
-                pos = end
-            n_chunks = len(chunks)
-            print(f"[pitch-librosa] 共 {n_chunks} 塊，各軌獨立執行緒")
-
-            def _process_track(track_idx: int, track):
-                orig = self._orig_audios.get(track_idx)
-                for chunk_idx, (c_start, c_end) in enumerate(chunks):
-                    if self._pitch_n != n:
-                        return
-                    try:
-                        if orig is None:
-                            self._hq_ends[track_idx] = c_end
-                            self._hq_end = min(self._hq_ends)
-                            continue
-
-                        part = orig[c_start:c_end].astype(np.float32)
-                        if float(np.sqrt(np.mean(part ** 2))) < 1e-4:
-                            print(f"[pitch-librosa] 軌{track_idx} chunk {chunk_idx+1}/{n_chunks} 靜音，跳過")
-                            track.audio[c_start:c_end] = part
-                        else:
-                            t_chunk = time.perf_counter()
-                            ch0 = librosa.effects.pitch_shift(
-                                part[:, 0], sr=sr, n_steps=float(n), res_type='kaiser_fast')
-                            ch1 = librosa.effects.pitch_shift(
-                                part[:, 1], sr=sr, n_steps=float(n), res_type='kaiser_fast')
-                            shifted = np.column_stack([ch0, ch1]).astype(np.float32)
-                            expected = c_end - c_start
-                            if len(shifted) > expected:
-                                shifted = shifted[:expected]
-                            elif len(shifted) < expected:
-                                pad = np.zeros((expected - len(shifted), 2), dtype=np.float32)
-                                shifted = np.concatenate([shifted, pad])
-                            track.audio[c_start:c_end] = shifted
-                            elapsed = time.perf_counter() - t_chunk
-                            print(f"[pitch-librosa] 軌{track_idx} chunk {chunk_idx+1}/{n_chunks}: "
-                                  f"{c_start/sr:.1f}s–{c_end/sr:.1f}s 完成，耗時 {elapsed:.2f}s")
-                    except Exception as e:
-                        print(f"[pitch-librosa bg 軌{track_idx} chunk {chunk_idx+1}]: {e}")
-                        if orig is not None:
-                            track.audio[c_start:c_end] = orig[c_start:c_end]
-
-                    self._hq_ends[track_idx] = c_end
-                    self._hq_end = min(self._hq_ends)
-
-            sem = threading.Semaphore(max(1, self.max_parallel_pitch))
-
-            def _process_track_limited(track_idx, track):
-                with sem:
-                    _process_track(track_idx, track)
-
-            threads = [threading.Thread(target=_process_track_limited, args=(i, t), daemon=True)
-                       for i, t in enumerate(self.tracks)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
-
-            if self._pitch_n != n:
-                print(f"[pitch-librosa] 已中途取消")
-                return
-
-            total_elapsed = time.perf_counter() - t0
-            print(f"[pitch-librosa] 全部完成，總耗時 {total_elapsed:.2f}s")
-            QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
-        except Exception as e:
-            total_elapsed = time.perf_counter() - t0
-            print(f"[pitch-librosa bg] error（耗時 {total_elapsed:.2f}s）: {e}")
             if self._pitch_n == n:
                 QMetaObject.invokeMethod(self, '_on_bg_pitch_done', Qt.ConnectionType.QueuedConnection)
 
