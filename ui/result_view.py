@@ -195,14 +195,15 @@ class ResultView(QWidget):
         tracks = []
         file_title = os.path.splitext(source_name)[0] if source_name else ''
 
-        for stem_name, (audio, sr) in results.items():
+        for stem_idx, (stem_name, (audio, sr)) in enumerate(results.items()):
             label = STEM_LABELS.get(stem_name, stem_name)
             track = TrackState(stem_name, audio, sr)
             tracks.append(track)
 
             ch = TrackChannel(track, label, self, file_title=file_title,
                               get_tempo=self.get_tempo, get_key=self.get_key,
-                              get_speed=lambda: self._engine.speed)
+                              get_speed=lambda: self._engine.speed,
+                              get_export_audio=lambda i=stem_idx: self._engine.get_export_audio(i))
             ch.mute_changed.connect(self._on_mute_changed)
             ch.solo_changed.connect(self._on_solo_changed)
             ch.seek_requested.connect(self._on_waveform_seek)
@@ -546,11 +547,13 @@ class ResultView(QWidget):
         self._dl_master_btn.setEnabled(False)
         try:
             master_vol = self._master_vol_slider.value() / 100.0
+            export_audios = {i: self._engine.get_export_audio(i) for i in range(len(self._tracks))}
             audio, sr = mix_tracks(
                 self._tracks,
                 master_volume=master_vol,
                 speed=self._engine.speed,
                 metronome_track=self._metronome_track,
+                export_audios=export_audios,
             )
             export_mp3(audio, sr, path, bitrate="320k")
             QMessageBox.information(self, "完成", f"已儲存至：\n{path}")

@@ -21,7 +21,8 @@ class TrackChannel(QWidget):
     position_changed  = Signal(float)   # 單軌播放進度，0.0 ~ 1.0
 
     def __init__(self, track: TrackState, label: str, parent=None,
-                 file_title: str = '', get_tempo=None, get_key=None, get_speed=None):
+                 file_title: str = '', get_tempo=None, get_key=None, get_speed=None,
+                 get_export_audio=None):
         super().__init__(parent)
         self.track = track
         self.label = label
@@ -29,6 +30,7 @@ class TrackChannel(QWidget):
         self._get_tempo = get_tempo or (lambda: 120.0)
         self._get_key = get_key or (lambda: '自動偵測')
         self._get_speed = get_speed or (lambda: 1.0)
+        self._get_export_audio = get_export_audio or (lambda: None)
         self._solo_player = SingleTrackPlayer(self)
         self._solo_player.load(track)
         self._solo_player.playback_stopped.connect(self._on_solo_stopped)
@@ -189,7 +191,8 @@ class TrackChannel(QWidget):
         self.dl_btn.setText("...")
         self.dl_btn.setEnabled(False)
         try:
-            audio, sr = mix_single_track(self.track, speed=self._get_speed())
+            audio, sr = mix_single_track(self.track, speed=self._get_speed(),
+                                         export_audio=self._get_export_audio())
             export_mp3(audio, sr, path, bitrate="320k")
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox

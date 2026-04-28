@@ -21,11 +21,13 @@ def mix_tracks(
     master_volume: float = 1.0,
     speed: float = 1.0,
     metronome_track: TrackState | None = None,
+    export_audios: dict | None = None,
 ) -> tuple[np.ndarray, int]:
     """
     依照各音軌的 volume / muted / solo 狀態混音。
     - speed：播放速度倍率，!=1.0 時重採樣輸出
     - metronome_track：節拍器音軌，未靜音時混入
+    - export_audios：{track_idx: np.ndarray}，下載時用於替換 track.audio（完整移調）
     回傳 (audio_np, sample_rate)。
     """
     if not tracks:
@@ -37,13 +39,14 @@ def mix_tracks(
 
     any_solo = any(t.solo for t in tracks)
 
-    for track in tracks:
+    for i, track in enumerate(tracks):
         if track.muted:
             continue
         if any_solo and not track.solo:
             continue
+        audio = export_audios[i] if (export_audios and i in export_audios) else track.audio
         buf = np.zeros((length, 2), dtype=np.float32)
-        buf[:track.length] = track.audio
+        buf[:len(audio)] = audio
         mixed += buf * track.volume
 
     # 節拍器（未靜音則混入）
@@ -62,9 +65,11 @@ def mix_tracks(
     return mixed.astype(np.float32), sr
 
 
-def mix_single_track(track: TrackState, speed: float = 1.0) -> tuple[np.ndarray, int]:
-    """單一音軌套用音量與速度後輸出。"""
-    audio = (track.audio * track.volume).astype(np.float32)
+def mix_single_track(track: TrackState, speed: float = 1.0,
+                     export_audio: np.ndarray | None = None) -> tuple[np.ndarray, int]:
+    """單一音軌套用音量與速度後輸出。export_audio 為下載時傳入的完整移調音頻。"""
+    src = export_audio if export_audio is not None else track.audio
+    audio = (src * track.volume).astype(np.float32)
     np.clip(audio, -1.0, 1.0, out=audio)
     if abs(speed - 1.0) > 0.005:
         audio = _resample(audio, speed)
