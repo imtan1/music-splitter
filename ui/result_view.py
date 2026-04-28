@@ -1,11 +1,12 @@
 import os
+import threading
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSlider, QScrollArea, QFileDialog,
     QSizePolicy, QMessageBox, QSpinBox, QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QMetaObject, Slot
 
 from core.player import AudioEngine, TrackState, SingleTrackPlayer
 from core.mixer import mix_tracks
@@ -545,20 +546,35 @@ class ResultView(QWidget):
 
         self._dl_master_btn.setText("處理中...")
         self._dl_master_btn.setEnabled(False)
-        try:
-            master_vol = self._master_vol_slider.value() / 100.0
-            export_audios = {i: self._engine.get_export_audio(i) for i in range(len(self._tracks))}
-            audio, sr = mix_tracks(
-                self._tracks,
-                master_volume=master_vol,
-                speed=self._engine.speed,
-                metronome_track=self._metronome_track,
-                export_audios=export_audios,
-            )
-            export_mp3(audio, sr, path, bitrate="320k")
-            QMessageBox.information(self, "完成", f"已儲存至：\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "匯出失敗", str(e))
-        finally:
-            self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
-            self._dl_master_btn.setEnabled(True)
+        self._dl_master_error: str | None = None
+        self._dl_master_path = path
+
+        def _work():
+            try:
+                master_vol = self._master_vol_slider.value() / 100.0
+                export_audios = {i: self._engine.get_export_audio(i)
+                                 for i in range(len(self._tracks))}
+                audio, sr = mix_tracks(
+                    self._tracks,
+                    master_volume=master_vol,
+                    speed=self._engine.speed,
+                    metronome_track=self._metronome_track,
+                    export_audios=export_audios,
+                )
+                export_mp3(audio, sr, path, bitrate="320k")
+            except Exception as e:
+                self._dl_master_error = str(e)
+            QMetaObject.invokeMethod(self, '_on_download_master_done',
+                                     Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    @Slot()
+    def _on_download_master_done(self):
+        self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+        self._dl_master_btn.setEnabled(True)
+        if self._dl_master_error:
+            QMessageBox.critical(self, "匯出失敗", self._dl_master_error)
+            self._dl_master_error = None
+        else:
+            QMessageBox.information(self, "完成", f"已儲存至：\n{self._dl_master_path}")

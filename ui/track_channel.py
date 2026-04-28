@@ -1,8 +1,9 @@
+import threading
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QSlider, QFileDialog, QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QMetaObject, Slot
 
 from core.player import TrackState, SingleTrackPlayer
 from core.mixer import mix_single_track
@@ -190,13 +191,24 @@ class TrackChannel(QWidget):
 
         self.dl_btn.setText("...")
         self.dl_btn.setEnabled(False)
-        try:
-            audio, sr = mix_single_track(self.track, speed=self._get_speed(),
-                                         export_audio=self._get_export_audio())
-            export_mp3(audio, sr, path, bitrate="320k")
-        except Exception as e:
+        self._dl_error: str | None = None
+
+        def _work():
+            try:
+                audio, sr = mix_single_track(self.track, speed=self._get_speed(),
+                                             export_audio=self._get_export_audio())
+                export_mp3(audio, sr, path, bitrate="320k")
+            except Exception as e:
+                self._dl_error = str(e)
+            QMetaObject.invokeMethod(self, '_on_download_done', Qt.ConnectionType.QueuedConnection)
+
+        threading.Thread(target=_work, daemon=True).start()
+
+    @Slot()
+    def _on_download_done(self):
+        self.dl_btn.setText("⬇ MP3")
+        self.dl_btn.setEnabled(True)
+        if self._dl_error:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "匯出失敗", str(e))
-        finally:
-            self.dl_btn.setText("⬇ MP3")
-            self.dl_btn.setEnabled(True)
+            QMessageBox.critical(self, "匯出失敗", self._dl_error)
+            self._dl_error = None
