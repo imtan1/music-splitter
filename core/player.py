@@ -8,7 +8,7 @@ import time
 import threading
 import numpy as np
 import sounddevice as sd
-from PySide6.QtCore import QObject, Signal, QTimer, Slot, Qt, QMetaObject
+from PySide6.QtCore import QObject, Signal, QTimer, Slot, Qt, QMetaObject, Q_ARG
 from core.pitch import StreamingPitchShifter
 
 
@@ -34,6 +34,7 @@ class AudioEngine(QObject):
     position_changed = Signal(float)   # 0.0 ~ 1.0
     playback_stopped = Signal()
     pitch_processing_changed = Signal(bool)   # True=背景處理中, False=完成
+    pitch_error = Signal(str)                 # 背景移調發生錯誤時發出
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -195,6 +196,11 @@ class AudioEngine(QObject):
                                   f"{c_start/sr:.1f}s–{c_end/sr:.1f}s 完成，耗時 {elapsed:.2f}s")
                     except Exception as e:
                         print(f"[pitch bg 軌{track_idx} chunk {chunk_idx+1}]: {e}")
+                        QMetaObject.invokeMethod(
+                            self, '_on_pitch_chunk_error',
+                            Qt.QueuedConnection,
+                            Q_ARG(str, f"軌 {track_idx} chunk {chunk_idx+1}: {e}")
+                        )
                         if orig is not None:
                             track.audio[c_start:c_end] = orig[c_start:c_end]
 
@@ -225,6 +231,11 @@ class AudioEngine(QObject):
     def _on_bg_pitch_done(self):
         self._pitch_shifter = None   # 全部 HQ，不再需要即時預覽
         self.pitch_processing_changed.emit(False)
+
+    @Slot(str)
+    def _on_pitch_chunk_error(self, msg: str):
+        '''背景移調異常時發出通知。'''
+        self.pitch_error.emit(msg)
 
     def get_export_audio(self, track_idx: int) -> np.ndarray:
         """Return audio for export. Waits for background HQ processing to finish if needed."""
@@ -321,8 +332,11 @@ class AudioEngine(QObject):
         # 只在尚未 HQ 覆蓋的區段套用即時 PV 預覽
         shifter = self._pitch_shifter
         if shifter is not None and pos >= hq_end:
-            mixed = shifter.process(mixed)
-            np.clip(mixed, -1.0, 1.0, out=mixed)
+            try:
+                mixed = shifter.process(mixed)
+                np.clip(mixed, -1.0, 1.0, out=mixed)
+            except Exception as e:
+                print(f"[player callback] pitch shifter 異常（可能背景執行緒已關閉）: {e}")
 
         outdata[:] = mixed
         self._position += frames

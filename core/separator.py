@@ -177,6 +177,9 @@ class SeparatorThread(QThread):
             try:
                 with ThreadPoolExecutor(max_workers=N) as pool:
                     chunk_results = list(pool.map(_process_chunk, chunks_meta))
+            except Exception as e:
+                self.error.emit(f"分源塊處理失敗: {e}")
+                return
             finally:
                 torch.set_num_threads(orig_threads)
 
@@ -209,5 +212,9 @@ class SeparatorThread(QThread):
             self.progress.emit("完成！", 100)
             self.finished.emit(result, tempo, key)
 
+        except RuntimeError as e:
+            self.error.emit(f"運行時錯誤（可能是 GPU 不足或模型載入失敗）: {e}")
+        except torch.cuda.OutOfMemoryError:
+            self.error.emit("CUDA 記憶體不足，請關閉其他程式或改用 CPU")
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(f"未知錯誤: {e}")

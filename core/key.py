@@ -47,11 +47,11 @@ def detect_key(mono: np.ndarray, sr: int) -> str:
     best_score, best_key = -np.inf, 'C'
     for root in range(12):
         maj = float(np.corrcoef(chroma, np.roll(major_p, root))[0, 1])
-        if maj > best_score:
+        if not np.isnan(maj) and maj > best_score:
             best_score, best_key = maj, major_names[root]
         if root in minor_roots:
             mn = float(np.corrcoef(chroma, np.roll(minor_p, root))[0, 1])
-            if mn > best_score:
+            if not np.isnan(mn) and mn > best_score:
                 best_score, best_key = mn, minor_roots[root]
 
     return best_key
