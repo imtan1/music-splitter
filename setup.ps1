@@ -205,7 +205,7 @@ Ok "All packages installed"
 Step 5 "Verifying installation..."
 
 $allOk = $true
-foreach ($mod in @("PySide6","torch","torchaudio","demucs","sounddevice","librosa","pedalboard","onnxruntime","music21","verovio","matplotlib","parselmouth")) {
+foreach ($mod in @("PySide6","torch","torchaudio","demucs","sounddevice","librosa","pedalboard")) {
     & $PyCmd -c "import $mod" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Ok $mod }
     else {

@@ -23,14 +23,11 @@ class TrackChannel(QWidget):
     _dl_done          = Signal(str)     # 下載完成（錯誤訊息，空字串=成功）
 
     def __init__(self, track: TrackState, label: str, parent=None,
-                 file_title: str = '', get_tempo=None, get_key=None, get_speed=None,
-                 get_export_audio=None):
+                 file_title: str = '', get_speed=None, get_export_audio=None):
         super().__init__(parent)
         self.track = track
         self.label = label
         self._file_title = file_title
-        self._get_tempo = get_tempo or (lambda: 120.0)
-        self._get_key = get_key or (lambda: '自動偵測')
         self._get_speed = get_speed or (lambda: 1.0)
         self._get_export_audio = get_export_audio or (lambda: None)
         self._dl_done.connect(self._on_download_done)
@@ -109,15 +106,6 @@ class TrackChannel(QWidget):
         self.dl_btn.clicked.connect(self._on_download)
         row.addWidget(self.dl_btn)
 
-        # 人聲軌才顯示 MIDI 按鈕
-        if self.track.name == 'vocals':
-            self.midi_btn = QPushButton("♪ MIDI")
-            self.midi_btn.setObjectName("JianpuBtn")
-            self.midi_btn.setFixedWidth(76)
-            self.midi_btn.setToolTip("分析人聲音高並顯示 MIDI / 樂譜")
-            self.midi_btn.clicked.connect(self._on_midi)
-            row.addWidget(self.midi_btn)
-
     # ------------------------------------------------------------------
     # 公開方法
     # ------------------------------------------------------------------
@@ -172,14 +160,6 @@ class TrackChannel(QWidget):
         self.track.volume = ratio
         self.vol_value_lbl.setText(f"{value}%")
         self.volume_changed.emit(self.track.name, ratio)
-
-    def _on_midi(self):
-        from ui.midi_view import MidiView
-        dlg = MidiView(self.track, self.label, parent=self,
-                       file_title=self._file_title,
-                       initial_tempo=self._get_tempo(),
-                       initial_key=self._get_key())
-        dlg.exec()
 
     def _on_download(self):
         path, _ = QFileDialog.getSaveFileName(

@@ -163,12 +163,6 @@ class ResultView(QWidget):
     # 公開 API
     # ------------------------------------------------------------------
 
-    def get_tempo(self) -> float:
-        return float(self._tempo_spin.value())
-
-    def get_key(self) -> str:
-        return self._key_combo.currentText()
-
     def load_results(self, results: dict, source_name: str = "",
                      tempo: float = 120.0, key: str = 'C'):
         """
@@ -204,7 +198,6 @@ class ResultView(QWidget):
             tracks.append(track)
 
             ch = TrackChannel(track, label, self, file_title=file_title,
-                              get_tempo=self.get_tempo, get_key=self.get_key,
                               get_speed=lambda: self._engine.speed,
                               get_export_audio=lambda i=stem_idx: self._engine.get_export_audio(i))
             ch.mute_changed.connect(self._on_mute_changed)
