@@ -3,6 +3,7 @@
 使用 Demucs htdemucs_6s 模型將音頻拆分為六條音軌：人聲、鼓、貝斯、吉他、鋼琴、其他。
 分源完成後依各軌 onset strength 自動選擇最佳音源做 BPM 偵測，並對原始混音做調性偵測。
 """
+import gc
 import os
 import threading
 import numpy as np
@@ -138,6 +139,14 @@ class SeparatorThread(QThread):
 
             self.progress.emit("分源中（多核心平行處理）...", 20)
 
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetPriorityClass(
+                    ctypes.windll.kernel32.GetCurrentProcess(), 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+                )
+            except Exception:
+                pass
+
             # ── 切塊平行分源 ──────────────────────────────────────
             T = wav_norm.shape[-1]
             N = min(10, os.cpu_count() or 4)
@@ -185,11 +194,24 @@ class SeparatorThread(QThread):
 
             sources = torch.cat(chunk_results, dim=-1)  # (num_stems, C, T)
             sources = sources * ref.std() + ref.mean()
+            model_stems = model.sources  # e.g. ['drums','bass','other','vocals','guitar','piano']
+            sr = model.samplerate
+            del wav_norm, chunk_results
+            model.cpu()
+            del model
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetPriorityClass(
+                    ctypes.windll.kernel32.GetCurrentProcess(), 0x00000020  # NORMAL_PRIORITY_CLASS
+                )
+            except Exception:
+                pass
             # ─────────────────────────────────────────────────────
 
             result = {}
-            model_stems = model.sources  # e.g. ['drums','bass','other','vocals','guitar','piano']
-            sr = model.samplerate
 
             for i, stem_name in enumerate(model_stems):
                 if stem_name not in self.stems:
