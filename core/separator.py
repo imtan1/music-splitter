@@ -199,21 +199,28 @@ class SeparatorThread(QThread):
 
             orig_threads = torch.get_num_threads()
             torch.set_num_threads(max(1, orig_threads // N))
+            pool = ThreadPoolExecutor(max_workers=N)
+            futures = [pool.submit(_process_chunk, meta) for meta in chunks_meta]
+            chunk_results = []
+            pool_error = None
             try:
-                with ThreadPoolExecutor(max_workers=N) as pool:
-                    chunk_results = list(pool.map(_process_chunk, chunks_meta))
+                for f in futures:
+                    if self._cancelled:
+                        break
+                    chunk_results.append(f.result())
             except Exception as e:
-                if self._cancelled:
-                    self.cancelled.emit()
-                    return
-                self.error.emit(f"分源塊處理失敗: {e}")
-                return
+                pool_error = e
+            finally:
+                # wait=False：不等正在跑的塊，立刻返回；cancel_futures=True：取消尚未開始的塊
+                pool.shutdown(wait=False, cancel_futures=True)
+                torch.set_num_threads(orig_threads)
 
             if self._cancelled:
                 self.cancelled.emit()
                 return
-            finally:
-                torch.set_num_threads(orig_threads)
+            if pool_error is not None:
+                self.error.emit(f"分源塊處理失敗: {pool_error}")
+                return
 
             sources = torch.cat(chunk_results, dim=-1)  # (num_stems, C, T)
             sources = sources * ref.std() + ref.mean()
