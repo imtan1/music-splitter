@@ -207,6 +207,8 @@ class ResultView(QWidget):
             ch.seek_requested.connect(self._on_waveform_seek)
             ch.solo_play_started.connect(self._on_solo_play_started)
             ch.position_changed.connect(self._on_position_changed)
+            ch.download_started.connect(lambda: self._set_download_lock(True))
+            ch.download_finished.connect(lambda: self._set_download_lock(False))
             # 插在 stretch 之前
             self._channels_layout.insertWidget(self._channels_layout.count() - 1, ch)
             self._channels.append(ch)
@@ -375,9 +377,9 @@ class ResultView(QWidget):
 
         # ---- 底部按鈕 ----
         bottom_row = QHBoxLayout()
-        back_btn = QPushButton("← 新增歌曲")
-        back_btn.clicked.connect(self.back_requested)
-        bottom_row.addWidget(back_btn)
+        self._back_btn = QPushButton("← 新增歌曲")
+        self._back_btn.clicked.connect(self.back_requested)
+        bottom_row.addWidget(self._back_btn)
         bottom_row.addStretch()
         root.addLayout(bottom_row)
 
@@ -531,7 +533,15 @@ class ResultView(QWidget):
             else:
                 ch.set_solo_active(False)
 
+    def _set_download_lock(self, locked: bool):
+        """下載期間鎖住所有下載按鈕和新增歌曲鈕。"""
+        self._dl_master_btn.setEnabled(not locked)
+        self._back_btn.setEnabled(not locked)
+        for ch in self._channels:
+            ch.dl_btn.setEnabled(not locked)
+
     def _on_download_master(self):
+        self._set_download_lock(True)
         self._dl_master_btn.setText("處理中...")
         self._dl_master_btn.setEnabled(False)
         self._dl_master_audio = None
@@ -560,14 +570,14 @@ class ResultView(QWidget):
         if self._dl_master_prepare_error:
             QMessageBox.critical(self, "匯出失敗", self._dl_master_prepare_error)
             self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
-            self._dl_master_btn.setEnabled(True)
+            self._set_download_lock(False)
             return
 
         path, _ = QFileDialog.getSaveFileName(
             self, "儲存混音結果", "mixed_output.mp3", "MP3 檔案 (*.mp3)")
         if not path:
             self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
-            self._dl_master_btn.setEnabled(True)
+            self._set_download_lock(False)
             return
 
         audio, sr = self._dl_master_audio, self._dl_master_sr
@@ -584,7 +594,7 @@ class ResultView(QWidget):
 
     def _on_download_master_done(self, error: str, path: str):
         self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
-        self._dl_master_btn.setEnabled(True)
+        self._set_download_lock(False)
         if error:
             QMessageBox.critical(self, "匯出失敗", error)
         else:

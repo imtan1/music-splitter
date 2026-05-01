@@ -20,6 +20,8 @@ class TrackChannel(QWidget):
     seek_requested    = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
     solo_play_started = Signal()        # 單軌播放開始，通知 ResultView 停掉其它來源
     position_changed  = Signal(float)   # 單軌播放進度，0.0 ~ 1.0
+    download_started  = Signal()        # 開始下載，通知外部鎖住其他按鈕
+    download_finished = Signal()        # 下載結束（成功/失敗/取消），通知外部解鎖
     _dl_ready         = Signal()        # 音頻準備好，可跳出存檔視窗
     _dl_done          = Signal(str)     # 儲存完成（錯誤訊息，空字串=成功）
 
@@ -164,10 +166,11 @@ class TrackChannel(QWidget):
         self.volume_changed.emit(self.track.name, ratio)
 
     def _on_download(self):
-        self.dl_btn.setText("...")
+        self.dl_btn.setText("處理中...")
         self.dl_btn.setEnabled(False)
         self._dl_export_audio = None
         self._dl_prepare_error = ''
+        self.download_started.emit()
 
         def _prepare():
             try:
@@ -184,6 +187,7 @@ class TrackChannel(QWidget):
             QMessageBox.critical(self, "匯出失敗", self._dl_prepare_error)
             self.dl_btn.setText("⬇ MP3")
             self.dl_btn.setEnabled(True)
+            self.download_finished.emit()
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -195,6 +199,7 @@ class TrackChannel(QWidget):
         if not path:
             self.dl_btn.setText("⬇ MP3")
             self.dl_btn.setEnabled(True)
+            self.download_finished.emit()
             return
 
         export_audio = self._dl_export_audio
@@ -214,6 +219,7 @@ class TrackChannel(QWidget):
     def _on_download_done(self, error: str):
         self.dl_btn.setText("⬇ MP3")
         self.dl_btn.setEnabled(True)
+        self.download_finished.emit()
         if error:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "匯出失敗", error)
