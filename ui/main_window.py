@@ -295,6 +295,8 @@ class MainWindow(QMainWindow):
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_finished)
         self._thread.error.connect(self._on_error)
+        self._thread.cancelled.connect(self._on_cancelled)
+        self._progress_dialog.cancel_requested.connect(self._thread.cancel)
         self._thread.start()
 
         self._source_name = os.path.basename(file_path)
@@ -311,6 +313,12 @@ class MainWindow(QMainWindow):
         self._result_view.load_results(results, self._source_name,
                                        tempo=tempo, key=key)
         self._stack.setCurrentWidget(self._result_view)
+
+    def _on_cancelled(self):
+        if self._progress_dialog:
+            self._progress_dialog.close()
+            self._progress_dialog = None
+        self._thread = None
 
     def _on_error(self, message: str):
         if self._progress_dialog:

@@ -112,14 +112,19 @@ def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
 
 
 class SeparatorThread(QThread):
-    progress = Signal(str, int)         # (message, percent)
-    finished = Signal(dict, float, str) # {stem: (audio_np, sr)}, tempo, key
-    error = Signal(str)
+    progress  = Signal(str, int)         # (message, percent)
+    finished  = Signal(dict, float, str) # {stem: (audio_np, sr)}, tempo, key
+    error     = Signal(str)
+    cancelled = Signal()
 
     def __init__(self, input_path: str, stems: list[str], parent=None):
         super().__init__(parent)
         self.input_path = input_path
         self.stems = stems
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
 
     def run(self):
         try:
@@ -176,6 +181,8 @@ class SeparatorThread(QThread):
             lock = threading.Lock()
 
             def _process_chunk(meta):
+                if self._cancelled:
+                    raise RuntimeError("cancelled")
                 ctx_start, ctx_end, left_trim, right_trim = meta
                 chunk = wav_norm[:, :, ctx_start:ctx_end]
                 with torch.no_grad():
@@ -196,7 +203,14 @@ class SeparatorThread(QThread):
                 with ThreadPoolExecutor(max_workers=N) as pool:
                     chunk_results = list(pool.map(_process_chunk, chunks_meta))
             except Exception as e:
+                if self._cancelled:
+                    self.cancelled.emit()
+                    return
                 self.error.emit(f"分源塊處理失敗: {e}")
+                return
+
+            if self._cancelled:
+                self.cancelled.emit()
                 return
             finally:
                 torch.set_num_threads(orig_threads)
@@ -230,6 +244,10 @@ class SeparatorThread(QThread):
                 audio = audio.T.astype(np.float32)  # (samples, channels)
                 result[stem_name] = (audio, sr)
 
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
             # 分源後用各軌 onset strength 選最佳 BPM 音源
             self.progress.emit("偵測 BPM 與調性...", 95)
             from core.bpm import detect_bpm
@@ -240,12 +258,22 @@ class SeparatorThread(QThread):
             key_src = _pick_key_source(result, original_mono)
             key = detect_key(key_src, sr)
 
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
             self.progress.emit("完成！", 100)
             self.finished.emit(result, tempo, key)
 
         except RuntimeError as e:
-            self.error.emit(f"運行時錯誤（可能是 GPU 不足或模型載入失敗）: {e}")
+            if self._cancelled:
+                self.cancelled.emit()
+            else:
+                self.error.emit(f"運行時錯誤（可能是 GPU 不足或模型載入失敗）: {e}")
         except torch.cuda.OutOfMemoryError:
             self.error.emit("CUDA 記憶體不足，請關閉其他程式或改用 CPU")
         except Exception as e:
-            self.error.emit(f"未知錯誤: {e}")
+            if self._cancelled:
+                self.cancelled.emit()
+            else:
+                self.error.emit(f"未知錯誤: {e}")
