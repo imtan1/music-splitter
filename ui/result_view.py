@@ -131,8 +131,9 @@ KEY_PC: dict[str, int] = {
 
 
 class ResultView(QWidget):
-    back_requested     = Signal()         # 回主頁
-    _dl_master_done_sig = Signal(str, str)  # (error_msg, save_path)
+    back_requested      = Signal()
+    _dl_master_ready_sig = Signal()        # 音頻準備好，可跳出存檔視窗
+    _dl_master_done_sig  = Signal(str, str)  # (error_msg, save_path)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -140,6 +141,7 @@ class ResultView(QWidget):
         self._engine.position_changed.connect(self._on_position_changed)
         self._engine.playback_stopped.connect(self._on_playback_stopped)
         self._engine.pitch_processing_changed.connect(self._on_pitch_processing_changed)
+        self._dl_master_ready_sig.connect(self._on_download_master_ready)
         self._dl_master_done_sig.connect(self._on_download_master_done)
 
         self._channels: list[TrackChannel] = []
@@ -530,37 +532,55 @@ class ResultView(QWidget):
                 ch.set_solo_active(False)
 
     def _on_download_master(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "儲存混音結果",
-            "mixed_output.mp3",
-            "MP3 檔案 (*.mp3)",
-        )
-        if not path:
-            return
-
         self._dl_master_btn.setText("處理中...")
         self._dl_master_btn.setEnabled(False)
+        self._dl_master_audio = None
+        self._dl_master_sr = None
+        self._dl_master_prepare_error = ''
 
-        def _work():
-            error = ''
+        def _prepare():
             try:
                 master_vol = self._master_vol_slider.value() / 100.0
                 export_audios = {i: self._engine.get_export_audio(i)
                                  for i in range(len(self._tracks))}
-                audio, sr = mix_tracks(
+                self._dl_master_audio, self._dl_master_sr = mix_tracks(
                     self._tracks,
                     master_volume=master_vol,
                     speed=self._engine.speed,
                     metronome_track=self._metronome_track,
                     export_audios=export_audios,
                 )
+            except Exception as e:
+                self._dl_master_prepare_error = str(e)
+            self._dl_master_ready_sig.emit()
+
+        threading.Thread(target=_prepare, daemon=True).start()
+
+    def _on_download_master_ready(self):
+        if self._dl_master_prepare_error:
+            QMessageBox.critical(self, "匯出失敗", self._dl_master_prepare_error)
+            self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "儲存混音結果", "mixed_output.mp3", "MP3 檔案 (*.mp3)")
+        if not path:
+            self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
+            return
+
+        audio, sr = self._dl_master_audio, self._dl_master_sr
+
+        def _save():
+            error = ''
+            try:
                 export_mp3(audio, sr, path, bitrate="320k")
             except Exception as e:
                 error = str(e)
             self._dl_master_done_sig.emit(error, path)
 
-        threading.Thread(target=_work, daemon=True).start()
+        threading.Thread(target=_save, daemon=True).start()
 
     def _on_download_master_done(self, error: str, path: str):
         self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
