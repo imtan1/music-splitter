@@ -135,8 +135,12 @@ class TrackChannel(QWidget):
             self.play_btn.setText("▶")
 
     def seek_solo_player(self, ratio: float):
-        """外部呼叫：設定單軌播放起始位置（播放前呼叫）。"""
+        """外部呼叫：設定單軌播放起始位置（播放中或播放前皆可）。"""
         self._solo_player.seek(ratio)
+
+    def is_solo_playing(self) -> bool:
+        """外部呼叫：查詢此音軌是否正在單軌播放。"""
+        return self._solo_player.is_playing()
 
     def _toggle_solo_play(self):
         if self._solo_player.is_playing():

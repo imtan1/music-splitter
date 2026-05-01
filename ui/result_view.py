@@ -448,19 +448,33 @@ class ResultView(QWidget):
         tot_m, tot_s = divmod(int(total_sec), 60)
         self._time_lbl.setText(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
+    def _active_solo_channel(self):
+        for ch in self._channels:
+            if ch.is_solo_playing():
+                return ch
+        return None
+
     def _on_seek_pressed(self):
         self._seek_dragging = True
 
     def _on_seek_released(self):
         ratio = self._seek_bar.value() / 1000.0
-        self._engine.seek(ratio)
+        solo_ch = self._active_solo_channel()
+        if solo_ch:
+            solo_ch.seek_solo_player(ratio)
+        else:
+            self._engine.seek(ratio)
         for ch in self._channels:
             ch.set_position(ratio)
         self._seek_dragging = False
 
     def _on_waveform_seek(self, ratio: float):
         """波形圖點擊/拖曳 seek。"""
-        self._engine.seek(ratio)
+        solo_ch = self._active_solo_channel()
+        if solo_ch:
+            solo_ch.seek_solo_player(ratio)
+        else:
+            self._engine.seek(ratio)
         for ch in self._channels:
             ch.set_position(ratio)
         self._seek_bar.blockSignals(True)
