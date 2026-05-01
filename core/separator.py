@@ -216,6 +216,18 @@ class SeparatorThread(QThread):
                 torch.set_num_threads(orig_threads)
 
             if self._cancelled:
+                # 將模型移回 CPU 以立即釋放 GPU 記憶體，避免新分源 OOM
+                try:
+                    model.cpu()
+                    del model
+                except Exception:
+                    pass
+                if device == "cuda":
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                gc.collect()
                 self.cancelled.emit()
                 return
             if pool_error is not None:
