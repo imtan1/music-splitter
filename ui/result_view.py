@@ -570,6 +570,7 @@ class ResultView(QWidget):
         if self._dl_master_prepare_error:
             QMessageBox.critical(self, "匯出失敗", self._dl_master_prepare_error)
             self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
             self._set_download_lock(False)
             return
 
@@ -578,6 +579,7 @@ class ResultView(QWidget):
             self, "儲存混音結果", default_name, "MP3 檔案 (*.mp3)")
         if not path:
             self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
             self._set_download_lock(False)
             return
 
@@ -595,6 +597,7 @@ class ResultView(QWidget):
 
     def _on_download_master_done(self, error: str, path: str):
         self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+        self._dl_master_btn.setEnabled(True)
         self._set_download_lock(False)
         if error:
             QMessageBox.critical(self, "匯出失敗", error)
