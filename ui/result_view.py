@@ -190,9 +190,10 @@ class ResultView(QWidget):
         self._build_key_combo(base_pc, key or 'C')
 
         self._source_title = source_name or ''
+        self._file_title = os.path.splitext(source_name)[0] if source_name else ''
 
         tracks = []
-        file_title = os.path.splitext(source_name)[0] if source_name else ''
+        file_title = self._file_title
 
         for stem_idx, (stem_name, (audio, sr)) in enumerate(results.items()):
             label = STEM_LABELS.get(stem_name, stem_name)
@@ -534,11 +535,9 @@ class ResultView(QWidget):
                 ch.set_solo_active(False)
 
     def _set_download_lock(self, locked: bool):
-        """下載期間鎖住所有下載按鈕和新增歌曲鈕。"""
-        self._dl_master_btn.setEnabled(not locked)
+        """下載期間鎖住調性選單和新增歌曲鈕。"""
         self._back_btn.setEnabled(not locked)
-        for ch in self._channels:
-            ch.dl_btn.setEnabled(not locked)
+        self._key_combo.setEnabled(not locked)
 
     def _on_download_master(self):
         self._set_download_lock(True)
@@ -573,8 +572,9 @@ class ResultView(QWidget):
             self._set_download_lock(False)
             return
 
+        default_name = f"{self._file_title}_mixed.mp3" if self._file_title else "mixed_output.mp3"
         path, _ = QFileDialog.getSaveFileName(
-            self, "儲存混音結果", "mixed_output.mp3", "MP3 檔案 (*.mp3)")
+            self, "儲存混音結果", default_name, "MP3 檔案 (*.mp3)")
         if not path:
             self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
             self._set_download_lock(False)

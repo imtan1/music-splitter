@@ -190,10 +190,11 @@ class TrackChannel(QWidget):
             self.download_finished.emit()
             return
 
+        default_name = f"{self._file_title}_mixed_{self.label}.mp3" if self._file_title else f"{self.label}.mp3"
         path, _ = QFileDialog.getSaveFileName(
             self,
             f"儲存 {self.label} 音軌",
-            f"{self.label}.mp3",
+            default_name,
             "MP3 檔案 (*.mp3)",
         )
         if not path:

@@ -159,7 +159,10 @@ music-splitter/
 │   ├── separator.py         # Demucs 分源邏輯（背景執行緒）
 │   ├── player.py            # 多軌同步播放 + 即時增益 (sounddevice)
 │   ├── mixer.py             # 混音輸出（numpy 加權合成）
-│   └── exporter.py          # 音檔匯出（WAV/MP3）
+│   ├── exporter.py          # 音檔匯出（MP3）
+│   ├── pitch.py             # 串流相位聲碼器（即時移調預覽）
+│   ├── bpm.py               # BPM 偵測
+│   └── key.py               # 調性偵測
 └── assets/
     └── icons/
 ```
@@ -190,9 +193,6 @@ music-splitter/
   - 靜音偵測：RMS < −80 dB 跳過 pedalboard 加速
   - 調性選單動態產生（偵測調性居中，±8 半音，升記號往上 / 降記號往下）
 - [x] 播放速度調整（sounddevice output sample rate 倍率）
-- [x] MIDI 分析（FFT 自相關音高偵測 + music21 節奏量化）
-- [x] 五線譜（music21 + verovio SVG）
-- [x] 簡譜（matplotlib PNG）
 - [x] 節拍器（BPM 同步）
 - [ ] 卡拉 OK 快捷模式（一鍵靜音人聲並匯出）
 - [ ] 批次處理多首歌曲
@@ -216,6 +216,8 @@ torch>=2.0.0        # Demucs 依賴
 torchaudio>=2.0.0
 pydub>=0.25.1       # MP3 編碼（需系統安裝 ffmpeg）
 ffmpeg-python>=0.2.0
+librosa>=0.10.0     # BPM / 調性偵測
+pedalboard>=0.9.0   # RubberBand 高品質移調
 ```
 
 ---
