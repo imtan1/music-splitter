@@ -3,7 +3,6 @@
 AudioEngine：多軌同步播放，支援靜音、獨奏、音量、播放速度與移調倍率，低延遲 sounddevice callback 混音。
 SingleTrackPlayer：單軌獨立播放，用於各音軌的單獨試聽。
 """
-import math
 import time
 import threading
 import numpy as np

@@ -8,9 +8,7 @@ import os
 import threading
 import numpy as np
 import torch
-import soundfile as sf
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 
@@ -46,12 +44,17 @@ def _pick_key_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
     best_score = max(scores.values()) if scores else 0.0
 
     def get_mono(stem_name):
-        audio_np, _ = result[stem_name]
+        data = result.get(stem_name)
+        if data is None:
+            return None
+        audio_np, _ = data
         return audio_np.mean(axis=1).astype(np.float32)
 
     for stem in candidates:
         if best_score > 0 and scores[stem] >= best_score * THRESHOLD and scores[stem] > 1e-6:
-            return get_mono(stem)
+            mono = get_mono(stem)
+            if mono is not None:
+                return mono
     return original_mono
 
 
@@ -84,16 +87,22 @@ def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
         return best_score > 0 and scores[s] >= best_score * THRESHOLD and scores[s] > 1e-6
 
     def get_mono(stem_name):
-        audio_np, _ = result[stem_name]
+        data = result.get(stem_name)
+        if data is None:
+            return None
+        audio_np, _ = data
         return audio_np.mean(axis=1).astype(np.float32)
 
-    if strong('drums'):
-        return get_mono('drums')
-    if strong('bass'):
-        return get_mono('bass')
+    for stem in ('drums', 'bass'):
+        if strong(stem):
+            mono = get_mono(stem)
+            if mono is not None:
+                return mono
     melodic = max(('piano', 'guitar'), key=lambda s: scores[s])
     if strong(melodic):
-        return get_mono(melodic)
+        mono = get_mono(melodic)
+        if mono is not None:
+            return mono
     return original_mono
 
 

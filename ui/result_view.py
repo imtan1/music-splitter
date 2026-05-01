@@ -152,6 +152,7 @@ class ResultView(QWidget):
         self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
         self._base_key_pc: int | None = None       # 分源偵測調性的根音半音值
         self._source_title: str = ''
+        self._file_title: str = ''
 
         # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
         self._metro_rebuild_timer = QTimer(self)
