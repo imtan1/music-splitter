@@ -55,46 +55,39 @@ def _pick_key_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
     return original_mono
 
 
-def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> np.ndarray:
+def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> tuple[np.ndarray, str]:
     """
-    依各軌 onset strength 選出最適合做 BPM 分析的音源。
-    優先順序：drums → bass → piano/guitar（取較強者）→ original
+    依「onset flux × presence（出現時間比例）」的綜合分數選出最適合做 BPM 分析的音源。
+    onset flux 反映節拍強度，presence 避免只出現一小段的軌（如短暫的鼓段）壓過全曲主伴奏。
+    回傳 (mono_audio, stem_name)
     """
-    THRESHOLD = 0.1  # 相對門檻：至少達最強軌的 10%
+    HOP = 512
 
-    def onset_strength(stem_name):
+    def score(stem_name):
         data = result.get(stem_name)
         if data is None:
             return 0.0
         audio_np, _ = data
-        mono = audio_np.mean(axis=1).astype(np.float32)  # (samples, ch) → mono
-        HOP = 512
+        mono = audio_np.mean(axis=1).astype(np.float32)
         n = len(mono) // HOP
         if n < 4:
             return 0.0
         frames = mono[:n * HOP].reshape(n, HOP)
         rms = np.sqrt(np.mean(frames ** 2, axis=1))
-        flux = np.maximum(np.diff(rms), 0)
-        return float(flux.mean())
+        # onset flux
+        flux = float(np.maximum(np.diff(rms), 0).mean())
+        # presence：有聲幀比例（RMS > 全軌峰值的 5%）
+        presence = float(np.sum(rms > rms.max() * 0.05) / n) if rms.max() > 1e-6 else 0.0
+        return flux * presence
 
-    scores = {s: onset_strength(s) for s in ('drums', 'bass', 'piano', 'guitar')}
-    best_score = max(scores.values()) if scores else 0.0
+    candidates = ('drums', 'bass', 'piano', 'guitar')
+    scores = {s: score(s) for s in candidates}
+    best = max(scores, key=lambda s: scores[s])
 
-    def strong(s):
-        return best_score > 0 and scores[s] >= best_score * THRESHOLD and scores[s] > 1e-6
-
-    def get_mono(stem_name):
-        audio_np, _ = result[stem_name]
-        return audio_np.mean(axis=1).astype(np.float32)
-
-    if strong('drums'):
-        return get_mono('drums')
-    if strong('bass'):
-        return get_mono('bass')
-    melodic = max(('piano', 'guitar'), key=lambda s: scores[s])
-    if strong(melodic):
-        return get_mono(melodic)
-    return original_mono
+    if scores[best] > 1e-8:
+        audio_np, _ = result[best]
+        return audio_np.mean(axis=1).astype(np.float32), best
+    return original_mono, 'original'
 
 
 def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
@@ -104,7 +97,7 @@ def _detect_key_chromagram(mono: np.ndarray, sr: int) -> str:
 
 class SeparatorThread(QThread):
     progress = Signal(str, int)         # (message, percent)
-    finished = Signal(dict, float, str) # {stem: (audio_np, sr)}, tempo, key
+    finished = Signal(dict, float, str, str, object) # {stem: (audio_np, sr)}, tempo, key, bpm_source, beat_times
     error = Signal(str)
 
     def __init__(self, input_path: str, stems: list[str], parent=None):
@@ -226,13 +219,14 @@ class SeparatorThread(QThread):
             from core.bpm import detect_bpm
             from core.key import detect_key
             original_mono = original_wav_np.mean(axis=0).astype(np.float32)
-            tempo_src = _pick_tempo_source(result, original_mono)
-            tempo = detect_bpm(tempo_src, sr)
+
+            tempo_src, bpm_source = _pick_tempo_source(result, original_mono)
+            tempo, beat_times = detect_bpm(tempo_src, sr)
             key_src = _pick_key_source(result, original_mono)
             key = detect_key(key_src, sr)
 
             self.progress.emit("完成！", 100)
-            self.finished.emit(result, tempo, key)
+            self.finished.emit(result, tempo, key, bpm_source, beat_times)
 
         except RuntimeError as e:
             self.error.emit(f"運行時錯誤（可能是 GPU 不足或模型載入失敗）: {e}")

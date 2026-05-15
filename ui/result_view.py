@@ -14,37 +14,72 @@ from core.exporter import export_mp3
 from core.separator import STEM_LABELS
 from ui.track_channel import TrackChannel
 
-def _generate_metronome(total_samples: int, sample_rate: int, bpm: float) -> np.ndarray:
-    """產生節拍器音頻陣列，單一點擊音。"""
+def _detect_first_onset(tracks, threshold: float = 0.005) -> int:
+    """找所有音軌中最早出現聲音的 sample 位置（RMS > threshold）。"""
+    HOP = 512
+    earliest = 0
+    found = False
+    for track in tracks:
+        mono = track.audio.mean(axis=1)
+        n = len(mono) // HOP
+        for i in range(n):
+            if float(np.sqrt(np.mean(mono[i * HOP:(i + 1) * HOP] ** 2))) > threshold:
+                pos = i * HOP
+                if not found or pos < earliest:
+                    earliest = pos
+                    found = True
+                break
+    return earliest
+
+
+def _generate_metronome(total_samples: int, sample_rate: int, bpm: float,
+                         onset_offset: int = 0,
+                         beat_times: np.ndarray | None = None,
+                         metro_offset_samples: int = 0) -> np.ndarray:
+    """
+    產生節拍器音頻陣列。
+    beat_times 不為空時：直接依絕對拍點秒數放置點擊音，不套用任何 offset。
+    beat_times 為空時：等間距 fallback，起始點 = onset_offset + metro_offset_samples。
+    """
     audio = np.zeros((total_samples, 2), dtype=np.float32)
-    beat_samples = max(1, int(round(sample_rate * 60.0 / bpm)))
     click_dur = int(sample_rate * 0.022)   # 22ms 短促點擊
 
     t = np.arange(click_dur, dtype=np.float32) / sample_rate
     click = (np.sin(2 * np.pi * 1000.0 * t) * np.exp(-180.0 * t)).astype(np.float32)
 
-    pos = 0
-    while pos < total_samples:
-        end = min(pos + click_dur, total_samples)
-        chunk = click[:end - pos]
-        audio[pos:end, 0] += chunk
-        audio[pos:end, 1] += chunk
-        pos += beat_samples
+    def _place(pos: int):
+        if 0 <= pos < total_samples:
+            end = min(pos + click_dur, total_samples)
+            audio[pos:end, 0] += click[:end - pos]
+            audio[pos:end, 1] += click[:end - pos]
+
+    if beat_times is not None and len(beat_times) > 0:
+        for bt in beat_times:
+            _place(int(round(bt * sample_rate)))
+    else:
+        # 等間距模式：起始點 = onset_offset + 使用者手動偏移
+        beat_samples = max(1, int(round(sample_rate * 60.0 / bpm)))
+        pos = onset_offset + metro_offset_samples
+        while pos < total_samples:
+            _place(pos)
+            pos += beat_samples
 
     np.clip(audio, -1.0, 1.0, out=audio)
     return audio
 
 
 class MetronomeChannel(QWidget):
-    """節拍器控制列：開關 + 速度倍率 + 音量。"""
+    """節拍器控制列：開關 + 速度倍率 + 偏移 + 音量。"""
 
     speed_changed = Signal()
+    offset_changed = Signal(int)
 
     def __init__(self, track: TrackState, parent=None):
         super().__init__(parent)
         self.track = track
         self.track.muted = True          # 預設關閉
         self.multiplier = 1.0            # 速度倍率，預設 1x
+        self._offset_ms = 0
         self.setObjectName("TrackChannel")
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -82,6 +117,25 @@ class MetronomeChannel(QWidget):
             row.addWidget(btn)
 
         row.addSpacing(8)
+        row.addWidget(QLabel("偏移："))
+
+        self._offset_dec_btn = QPushButton("◀")
+        self._offset_dec_btn.setFixedWidth(24)
+        self._offset_dec_btn.clicked.connect(lambda: self._change_offset(-10))
+        row.addWidget(self._offset_dec_btn)
+
+        self._offset_lbl = QLabel("0ms")
+        self._offset_lbl.setFixedWidth(52)
+        self._offset_lbl.setAlignment(Qt.AlignCenter)
+        self._offset_lbl.setObjectName("SmallLabel")
+        row.addWidget(self._offset_lbl)
+
+        self._offset_inc_btn = QPushButton("▶")
+        self._offset_inc_btn.setFixedWidth(24)
+        self._offset_inc_btn.clicked.connect(lambda: self._change_offset(10))
+        row.addWidget(self._offset_inc_btn)
+
+        row.addSpacing(8)
         row.addWidget(QLabel("音量："))
 
         self._vol_slider = QSlider(Qt.Horizontal)
@@ -110,6 +164,11 @@ class MetronomeChannel(QWidget):
         for m, btn in self._speed_btns.items():
             btn.setChecked(m == mult)
         self.speed_changed.emit()
+
+    def _change_offset(self, delta: int):
+        self._offset_ms = max(-500, min(500, self._offset_ms + delta))
+        self._offset_lbl.setText(f"{self._offset_ms:+d}ms" if self._offset_ms != 0 else "0ms")
+        self.offset_changed.emit(self._offset_ms)
 
     def _on_volume(self, value: int):
         self.track.volume = value / 100.0
@@ -150,6 +209,9 @@ class ResultView(QWidget):
         self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
         self._base_key_pc: int | None = None       # 分源偵測調性的根音半音值
         self._source_title: str = ''
+        self._onset_offset: int = 0  # 音樂第一音位置，節拍器從此對齊
+        self._metro_offset_ms: int = 0  # 使用者手動偏移（ms）
+        self._beat_times: np.ndarray = np.array([], dtype=np.float64)  # librosa 真實拍點（秒）
 
         # 防抖計時器：BPM 停止變動後 600ms 才重建節拍器
         self._metro_rebuild_timer = QTimer(self)
@@ -164,7 +226,8 @@ class ResultView(QWidget):
     # ------------------------------------------------------------------
 
     def load_results(self, results: dict, source_name: str = "",
-                     tempo: float = 120.0, key: str = 'C'):
+                     tempo: float = 120.0, key: str = 'C', bpm_source: str = 'original',
+                     beat_times=None):
         """
         results: {stem_name: (audio_np, sample_rate)}
         tempo/key: 分源前偵測到的 BPM 與調性
@@ -184,6 +247,9 @@ class ResultView(QWidget):
         self._tempo_spin.valueChanged.disconnect()
         self._tempo_spin.setValue(max(40, min(240, int(tempo))))
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
+        src_label = {"drums": "鼓", "bass": "貝斯", "piano": "鋼琴",
+                     "guitar": "吉他", "original": "原始混音"}.get(bpm_source, bpm_source)
+        self._bpm_source_lbl.setText(f"({src_label})")
         base_pc = KEY_PC.get(key, 0)
         self._build_key_combo(base_pc, key or 'C')
 
@@ -215,15 +281,25 @@ class ResultView(QWidget):
         if tracks:
             total_samples = max(t.length for t in tracks)
             sr = tracks[0].sample_rate
-            metro_audio = _generate_metronome(total_samples, sr, tempo)
+            self._onset_offset = _detect_first_onset(tracks)
+            self._beat_times = beat_times if (beat_times is not None and len(beat_times) > 0) \
+                               else np.array([], dtype=np.float64)
+            metro_audio = _generate_metronome(
+                total_samples, sr, tempo,
+                onset_offset=self._onset_offset,
+                beat_times=self._beat_times,
+                metro_offset_samples=0,
+            )
             self._metronome_track = TrackState('metronome', metro_audio, sr)
             self._metronome_track.muted = True
 
             # 移除舊節拍器 widget
             if self._metronome_channel is not None:
                 self._metronome_channel.deleteLater()
+            self._metro_offset_ms = 0
             self._metronome_channel = MetronomeChannel(self._metronome_track, self)
             self._metronome_channel.speed_changed.connect(self._rebuild_metronome)
+            self._metronome_channel.offset_changed.connect(self._on_metro_offset_changed)
             self._channels_layout.insertWidget(
                 self._channels_layout.count() - 1, self._metronome_channel
             )
@@ -309,7 +385,11 @@ class ResultView(QWidget):
         self._tempo_spin.valueChanged.connect(self._on_tempo_changed)
         info_row.addWidget(self._tempo_spin)
 
-        info_row.addSpacing(20)
+        self._bpm_source_lbl = QLabel("")
+        self._bpm_source_lbl.setObjectName("SmallLabel")
+        info_row.addWidget(self._bpm_source_lbl)
+
+        info_row.addSpacing(12)
 
         info_row.addWidget(QLabel("調性："))
         self._key_combo = QComboBox()
@@ -508,15 +588,41 @@ class ResultView(QWidget):
     def _rebuild_metronome(self):
         """重建節拍器音軌（BPM 或速度倍率變動後觸發）。
         直接替換 TrackState.audio reference，engine callback 下一幀自動生效，不中斷播放。
+        multiplier == 1.0 且 BPM 未被手動修改時，使用真實 beat_times 消除漂移；
+        其他情況（倍速、使用者調整 BPM）退回等間距模式。
         """
         if not self._tracks or self._metronome_track is None:
             return
         tempo = float(self._tempo_spin.value())
-        if self._metronome_channel is not None:
-            tempo *= self._metronome_channel.multiplier
+        mult = self._metronome_channel.multiplier if self._metronome_channel is not None else 1.0
+        tempo *= mult
         total_samples = max(t.length for t in self._tracks)
         sr = self._tracks[0].sample_rate
-        self._metronome_track.audio = _generate_metronome(total_samples, sr, tempo)
+        metro_offset = int(self._metro_offset_ms * sr / 1000)
+        use_real_beats = (
+            mult == 1.0
+            and abs(float(self._tempo_spin.value()) - self._base_tempo) < 1.0
+            and len(self._beat_times) > 0
+        )
+        if use_real_beats:
+            # beat_times 模式：onset_offset 完全不使用，由 _generate_metronome 忽略
+            effective_onset = 0
+        else:
+            # 等間距模式：盡量從 beat_times[0] 推算起始點，相位與 beat_times 模式一致
+            if len(self._beat_times) > 0:
+                effective_onset = int(round(float(self._beat_times[0]) * sr))
+            else:
+                effective_onset = self._onset_offset
+        self._metronome_track.audio = _generate_metronome(
+            total_samples, sr, tempo,
+            onset_offset=effective_onset,
+            beat_times=self._beat_times if use_real_beats else None,
+            metro_offset_samples=metro_offset,
+        )
+
+    def _on_metro_offset_changed(self, offset_ms: int):
+        self._metro_offset_ms = offset_ms
+        self._rebuild_metronome()
 
     def _on_mute_changed(self, stem_name: str, muted: bool):
         pass  # TrackState 已在 channel 內更新，引擎 callback 自動讀取

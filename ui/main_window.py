@@ -303,13 +303,15 @@ class MainWindow(QMainWindow):
         if self._progress_dialog:
             self._progress_dialog.update_progress(message, percent)
 
-    def _on_finished(self, results: dict, tempo: float, key: str):
+    def _on_finished(self, results: dict, tempo: float, key: str,
+                     bpm_source: str = 'original', beat_times=None):
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
 
         self._result_view.load_results(results, self._source_name,
-                                       tempo=tempo, key=key)
+                                       tempo=tempo, key=key, bpm_source=bpm_source,
+                                       beat_times=beat_times)
         self._stack.setCurrentWidget(self._result_view)
 
     def _on_error(self, message: str):
