@@ -12,7 +12,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtSvg import QSvgRenderer
 
-from core.separator_process import SeparatorProcess, STEMS, STEM_LABELS
+from core.separator_process import SeparatorProcess, STEMS, STEM_LABELS, shutdown_worker
 from ui.progress_dialog import ProgressDialog
 from ui.result_view import ResultView
 
@@ -331,3 +331,7 @@ class MainWindow(QMainWindow):
             self._progress_dialog.close()
             self._progress_dialog = None
         QMessageBox.critical(self, "分源失敗", f"發生錯誤：\n{message}")
+
+    def closeEvent(self, event):
+        shutdown_worker()
+        super().closeEvent(event)

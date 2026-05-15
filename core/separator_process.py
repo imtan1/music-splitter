@@ -1,15 +1,51 @@
 """
-分源進程管理器：用 QThread 在背景輪詢子進程狀態，
-子進程執行 separator_worker.run_separation()。
+分源進程管理器：維護一個持久化子進程（只啟動一次），
+透過 Queue 傳送任務與接收結果，避免每次重新載入 torch/demucs。
 
-取消時直接 kill 子進程，CPU 立即停止。
+取消時 kill 子進程，CPU 立即停止；下次分源時自動重啟子進程。
 """
 import os
 import pickle
 import multiprocessing
 from PySide6.QtCore import QThread, Signal
 
-from core.separator_worker import run_separation, STEMS, STEM_LABELS
+from core.separator_worker import worker_loop, STEMS, STEM_LABELS
+
+# 全域持久化子進程（應用程式生命週期內只啟動一次）
+_worker_process: multiprocessing.Process | None = None
+_task_queue:    multiprocessing.Queue | None = None
+_result_queue:  multiprocessing.Queue | None = None
+_ctx = multiprocessing.get_context('spawn')
+
+
+def _ensure_worker() -> tuple:
+    """確保子進程存活，若已死亡則重新啟動。回傳 (task_q, result_q, process)。"""
+    global _worker_process, _task_queue, _result_queue
+
+    if _worker_process is None or not _worker_process.is_alive():
+        _task_queue   = _ctx.Queue()
+        _result_queue = _ctx.Queue()
+        _worker_process = _ctx.Process(
+            target=worker_loop,
+            args=(_task_queue, _result_queue),
+            daemon=True,
+        )
+        _worker_process.start()
+
+    return _task_queue, _result_queue, _worker_process
+
+
+def shutdown_worker():
+    """應用程式關閉時呼叫，清理子進程。"""
+    global _worker_process, _task_queue
+    if _worker_process and _worker_process.is_alive():
+        try:
+            _task_queue.put(('quit',))
+            _worker_process.join(timeout=3)
+        except Exception:
+            pass
+        if _worker_process.is_alive():
+            _worker_process.kill()
 
 
 class SeparatorProcess(QThread):
@@ -22,38 +58,40 @@ class SeparatorProcess(QThread):
         super().__init__(parent)
         self.input_path = input_path
         self.stems = stems
-        self._process: multiprocessing.Process | None = None
-        self._queue: multiprocessing.Queue | None = None
+        self._killed = False
 
     def cancel(self):
-        """立即殺死子進程，CPU 使用率馬上下降。"""
-        if self._process and self._process.is_alive():
-            self._process.kill()   # SIGKILL — 不可忽略，立即停止
-            self._process.join(timeout=2)
+        """立即殺死子進程，CPU 使用率馬上下降。下次分源會自動重啟。"""
+        global _worker_process
+        self._killed = True
+        if _worker_process and _worker_process.is_alive():
+            _worker_process.kill()
+            _worker_process.join(timeout=2)
+            _worker_process = None  # 標記需要重啟
 
     def run(self):
-        """QThread 的主體：啟動子進程並輪詢 Queue。"""
-        ctx = multiprocessing.get_context('spawn')  # Windows 安全
-        self._queue = ctx.Queue()
-        self._process = ctx.Process(
-            target=run_separation,
-            args=(self.input_path, self.stems, self._queue),
-            daemon=True,  # 主程式結束時子進程自動回收
-        )
-        self._process.start()
+        """QThread 主體：送任務給持久化子進程，輪詢結果。"""
+        self._killed = False
+        task_q, result_q, proc = _ensure_worker()
+
+        # 送出任務
+        task_q.put(('run', self.input_path, self.stems))
 
         tmp_path = None
         try:
             while True:
-                # 每 100ms 檢查一次 Queue，避免阻塞
+                if self._killed:
+                    self.cancelled.emit()
+                    return
+
                 try:
-                    msg = self._queue.get(timeout=0.1)
+                    msg = result_q.get(timeout=0.1)
                 except Exception:
-                    # timeout — 子進程還在跑，檢查它是否意外死亡
-                    if not self._process.is_alive():
-                        exit_code = self._process.exitcode
-                        if exit_code != 0:
-                            # 被 kill() 或異常退出
+                    # timeout — 檢查子進程是否意外死亡
+                    if not proc.is_alive():
+                        if not self._killed:
+                            self.error.emit('分源子進程意外終止')
+                        else:
                             self.cancelled.emit()
                         return
                     continue
@@ -76,13 +114,7 @@ class SeparatorProcess(QThread):
         except Exception as e:
             self.error.emit(f'進程通訊錯誤: {e}')
             return
-        finally:
-            # 確保子進程結束
-            if self._process and self._process.is_alive():
-                self._process.kill()
-                self._process.join(timeout=2)
 
-        # 子進程已完成，讀取暫存結果
         if tmp_path is None:
             self.cancelled.emit()
             return

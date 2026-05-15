@@ -1,8 +1,12 @@
 """
-分源 Worker：在獨立子進程中執行，與主進程透過 Queue 溝通。
-不依賴 Qt，不依賴 QThread，可被 process.kill() 真正停止。
+分源 Worker：在持久化子進程中執行，等待任務並回傳結果。
+不依賴 Qt，可被 process.kill() 真正停止。
 
-Queue 訊息格式：
+task_queue 訊息格式：
+  ('run',  input_path: str, stems: list)
+  ('quit',)
+
+result_queue 訊息格式：
   ('progress', message: str, percent: int)
   ('done',     result_path: str)          # pickle 暫存檔路徑
   ('error',    message: str)
@@ -63,6 +67,24 @@ def _pick_tempo_source(result: dict, original_mono: np.ndarray) -> tuple[np.ndar
         audio_np, _ = result[best]
         return audio_np.mean(axis=1).astype(np.float32), best
     return original_mono, 'original'
+
+
+def worker_loop(task_queue, result_queue) -> None:
+    """
+    持久化子進程的主循環：等待任務，執行分源，回傳結果。
+    收到 ('quit',) 或被 kill() 時結束。
+    """
+    while True:
+        try:
+            msg = task_queue.get()
+        except Exception:
+            break
+
+        if msg[0] == 'quit':
+            break
+        elif msg[0] == 'run':
+            _, input_path, stems = msg
+            run_separation(input_path, stems, result_queue)
 
 
 def run_separation(input_path: str, stems: list, queue) -> None:
