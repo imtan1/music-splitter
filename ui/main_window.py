@@ -288,9 +288,12 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._import_page)
 
     def _start_separation(self, file_path: str, stems: list[str]):
-        # 強行停止前一個線程（立即返回，不阻塞）
+        # 警告：PyTorch 的 apply_model() 無法被中斷（C++ 層阻塞代碼）
+        # terminate() 對正在執行的 PyTorch 操作無效
+        # TODO: 改用多進程架構以實現真正的取消功能
         if self._thread and self._thread.isRunning():
-            self._thread.terminate()  # 比 quit() 更激進，立即停止
+            self._thread.terminate()
+            self._thread.wait(1000)  # 最多等 1 秒
 
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
