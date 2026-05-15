@@ -12,7 +12,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtSvg import QSvgRenderer
 
-from core.separator import SeparatorThread, STEMS, STEM_LABELS
+from core.separator_process import SeparatorProcess, STEMS, STEM_LABELS
 from ui.progress_dialog import ProgressDialog
 from ui.result_view import ResultView
 
@@ -267,7 +267,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("音樂分源程式")
         self.setMinimumSize(960, 620)
 
-        self._thread: SeparatorThread | None = None
+        self._thread: SeparatorProcess | None = None
         self._progress_dialog: ProgressDialog | None = None
 
         self._stack = QStackedWidget()
@@ -288,17 +288,14 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._import_page)
 
     def _start_separation(self, file_path: str, stems: list[str]):
-        # 警告：PyTorch 的 apply_model() 無法被中斷（C++ 層阻塞代碼）
-        # terminate() 對正在執行的 PyTorch 操作無效
-        # TODO: 改用多進程架構以實現真正的取消功能
+        # 若前一個分源還在，先取消（kill 子進程，立即停止）
         if self._thread and self._thread.isRunning():
-            self._thread.terminate()
-            self._thread.wait(1000)  # 最多等 1 秒
+            self._thread.cancel()
 
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
 
-        self._thread = SeparatorThread(file_path, stems, self)
+        self._thread = SeparatorProcess(file_path, stems, self)
         self._thread.progress.connect(self._on_progress)
         self._thread.finished.connect(self._on_finished)
         self._thread.error.connect(self._on_error)
