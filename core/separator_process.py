@@ -4,17 +4,20 @@
 
 取消時 kill 子進程，CPU 立即停止；下次分源時自動重啟子進程。
 """
+from __future__ import annotations
+
 import os
 import pickle
 import multiprocessing
+from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 from core.separator_worker import worker_loop, STEMS, STEM_LABELS
 
 # 全域持久化子進程（應用程式生命週期內只啟動一次）
-_worker_process: multiprocessing.Process | None = None
-_task_queue:    multiprocessing.Queue | None = None
-_result_queue:  multiprocessing.Queue | None = None
+_worker_process: Optional[multiprocessing.Process] = None
+_task_queue:    Optional[multiprocessing.Queue]   = None
+_result_queue:  Optional[multiprocessing.Queue]   = None
 _ctx = multiprocessing.get_context('spawn')
 
 
