@@ -288,9 +288,9 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._import_page)
 
     def _start_separation(self, file_path: str, stems: list[str]):
-        # 等待前一個線程完全結束，避免 GPU/IO 衝突
+        # 前一個線程若還在清理，直接停止它（不等待，避免主線程阻塞）
         if self._thread and self._thread.isRunning():
-            self._thread.wait(timeout=5000)  # 最多等 5 秒
+            self._thread.quit()
 
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
@@ -324,10 +324,7 @@ class MainWindow(QMainWindow):
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
-        # 等待分源線程完全結束（包括 GPU/IO 清理）
-        if self._thread:
-            self._thread.wait(timeout=3000)  # 最多等 3 秒
-            self._thread = None
+        # 線程會異步清理資源，不需要等待（避免主線程阻塞）
 
     def _on_error(self, message: str):
         if self._progress_dialog:
