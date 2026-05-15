@@ -20,14 +20,7 @@ all_binaries = []
 all_hidden   = []
 
 for pkg in ['demucs', 'librosa', 'audioread', 'soundfile', 'resampy',
-            'soxr', 'lazy_loader', 'msgpack', 'verovio', 'music21']:
-    d, b, h = collect_all(pkg)
-    all_datas    += d
-    all_binaries += b
-    all_hidden   += h
-
-# matplotlib 後端
-for pkg in ['matplotlib']:
+            'soxr', 'lazy_loader', 'msgpack']:
     d, b, h = collect_all(pkg)
     all_datas    += d
     all_binaries += b
@@ -81,9 +74,6 @@ a = Analysis(
         'PySide6.QtGui',
         'PySide6.QtWidgets',
         'PySide6.QtMultimedia',
-        # Matplotlib
-        'matplotlib.backends.backend_agg',
-        'matplotlib.pyplot',
         # Demucs
         'demucs.pretrained',
         'demucs.apply',

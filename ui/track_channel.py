@@ -20,7 +20,10 @@ class TrackChannel(QWidget):
     seek_requested    = Signal(float)   # 0.0 ~ 1.0，波形點擊觸發
     solo_play_started = Signal()        # 單軌播放開始，通知 ResultView 停掉其它來源
     position_changed  = Signal(float)   # 單軌播放進度，0.0 ~ 1.0
-    _dl_done          = Signal(str)     # 下載完成（錯誤訊息，空字串=成功）
+    download_started  = Signal()        # 開始下載，通知外部鎖住其他按鈕
+    download_finished = Signal()        # 下載結束（成功/失敗/取消），通知外部解鎖
+    _dl_ready         = Signal()        # 音頻準備好，可跳出存檔視窗
+    _dl_done          = Signal(str)     # 儲存完成（錯誤訊息，空字串=成功）
 
     def __init__(self, track: TrackState, label: str, parent=None,
                  file_title: str = '', get_speed=None, get_export_audio=None):
@@ -30,6 +33,7 @@ class TrackChannel(QWidget):
         self._file_title = file_title
         self._get_speed = get_speed or (lambda: 1.0)
         self._get_export_audio = get_export_audio or (lambda: None)
+        self._dl_ready.connect(self._on_download_ready)
         self._dl_done.connect(self._on_download_done)
         self._solo_player = SingleTrackPlayer(self)
         self._solo_player.load(track)
@@ -131,8 +135,12 @@ class TrackChannel(QWidget):
             self.play_btn.setText("▶")
 
     def seek_solo_player(self, ratio: float):
-        """外部呼叫：設定單軌播放起始位置（播放前呼叫）。"""
+        """外部呼叫：設定單軌播放起始位置（播放中或播放前皆可）。"""
         self._solo_player.seek(ratio)
+
+    def is_solo_playing(self) -> bool:
+        """外部呼叫：查詢此音軌是否正在單軌播放。"""
+        return self._solo_player.is_playing()
 
     def _toggle_solo_play(self):
         if self._solo_player.is_playing():
@@ -162,33 +170,61 @@ class TrackChannel(QWidget):
         self.volume_changed.emit(self.track.name, ratio)
 
     def _on_download(self):
+        self.dl_btn.setText("處理中...")
+        self.dl_btn.setEnabled(False)
+        self._dl_export_audio = None
+        self._dl_prepare_error = ''
+        self.download_started.emit()
+
+        def _prepare():
+            try:
+                self._dl_export_audio = self._get_export_audio()
+            except Exception as e:
+                self._dl_prepare_error = str(e)
+            self._dl_ready.emit()
+
+        threading.Thread(target=_prepare, daemon=True).start()
+
+    def _on_download_ready(self):
+        if self._dl_prepare_error:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "匯出失敗", self._dl_prepare_error)
+            self.dl_btn.setText("⬇ MP3")
+            self.dl_btn.setEnabled(True)
+            self.download_finished.emit()
+            return
+
+        default_name = f"{self._file_title}_mixed_{self.label}.mp3" if self._file_title else f"{self.label}.mp3"
         path, _ = QFileDialog.getSaveFileName(
             self,
             f"儲存 {self.label} 音軌",
-            f"{self.label}.mp3",
+            default_name,
             "MP3 檔案 (*.mp3)",
         )
         if not path:
+            self.dl_btn.setText("⬇ MP3")
+            self.dl_btn.setEnabled(True)
+            self.download_finished.emit()
             return
 
-        self.dl_btn.setText("...")
-        self.dl_btn.setEnabled(False)
+        export_audio = self._dl_export_audio
 
-        def _work():
+        def _save():
             error = ''
             try:
                 audio, sr = mix_single_track(self.track, speed=self._get_speed(),
-                                             export_audio=self._get_export_audio())
+                                             export_audio=export_audio)
                 export_mp3(audio, sr, path, bitrate="320k")
             except Exception as e:
                 error = str(e)
             self._dl_done.emit(error)
 
-        threading.Thread(target=_work, daemon=True).start()
+        threading.Thread(target=_save, daemon=True).start()
 
     def _on_download_done(self, error: str):
         self.dl_btn.setText("⬇ MP3")
         self.dl_btn.setEnabled(True)
+        self.download_finished.emit()
         if error:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "匯出失敗", error)

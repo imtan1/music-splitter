@@ -121,7 +121,7 @@ echo [WARNING] FFmpeg not found. MP3 export will not work.
 echo    Option 1: Run "winget install ffmpeg", then copy ffmpeg.exe to dist\MusicSplitter\
 echo    Option 2: Download from https://github.com/BtbN/FFmpeg-Builds/releases
 echo              Extract bin\ffmpeg.exe to dist\MusicSplitter\
-echo    Other features (stem separation, playback, notation) are unaffected.
+echo    Other features (stem separation, playback) are unaffected.
 echo.
 
 :ffmpeg_done

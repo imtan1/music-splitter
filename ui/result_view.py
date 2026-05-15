@@ -190,8 +190,9 @@ KEY_PC: dict[str, int] = {
 
 
 class ResultView(QWidget):
-    back_requested     = Signal()         # 回主頁
-    _dl_master_done_sig = Signal(str, str)  # (error_msg, save_path)
+    back_requested      = Signal()
+    _dl_master_ready_sig = Signal()        # 音頻準備好，可跳出存檔視窗
+    _dl_master_done_sig  = Signal(str, str)  # (error_msg, save_path)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -199,6 +200,7 @@ class ResultView(QWidget):
         self._engine.position_changed.connect(self._on_position_changed)
         self._engine.playback_stopped.connect(self._on_playback_stopped)
         self._engine.pitch_processing_changed.connect(self._on_pitch_processing_changed)
+        self._dl_master_ready_sig.connect(self._on_download_master_ready)
         self._dl_master_done_sig.connect(self._on_download_master_done)
 
         self._channels: list[TrackChannel] = []
@@ -209,6 +211,7 @@ class ResultView(QWidget):
         self._base_tempo = 120.0   # 分源時偵測到的原始 BPM，作為速度計算基準
         self._base_key_pc: int | None = None       # 分源偵測調性的根音半音值
         self._source_title: str = ''
+        self._file_title: str = ''
         self._onset_offset: int = 0  # 音樂第一音位置，節拍器從此對齊
         self._metro_offset_ms: int = 0  # 使用者手動偏移（ms）
         self._beat_times: np.ndarray = np.array([], dtype=np.float64)  # librosa 真實拍點（秒）
@@ -254,9 +257,10 @@ class ResultView(QWidget):
         self._build_key_combo(base_pc, key or 'C')
 
         self._source_title = source_name or ''
+        self._file_title = os.path.splitext(source_name)[0] if source_name else ''
 
         tracks = []
-        file_title = os.path.splitext(source_name)[0] if source_name else ''
+        file_title = self._file_title
 
         for stem_idx, (stem_name, (audio, sr)) in enumerate(results.items()):
             label = STEM_LABELS.get(stem_name, stem_name)
@@ -271,6 +275,8 @@ class ResultView(QWidget):
             ch.seek_requested.connect(self._on_waveform_seek)
             ch.solo_play_started.connect(self._on_solo_play_started)
             ch.position_changed.connect(self._on_position_changed)
+            ch.download_started.connect(lambda: self._set_download_lock(True))
+            ch.download_finished.connect(lambda: self._set_download_lock(False))
             # 插在 stretch 之前
             self._channels_layout.insertWidget(self._channels_layout.count() - 1, ch)
             self._channels.append(ch)
@@ -453,9 +459,9 @@ class ResultView(QWidget):
 
         # ---- 底部按鈕 ----
         bottom_row = QHBoxLayout()
-        back_btn = QPushButton("← 新增歌曲")
-        back_btn.clicked.connect(self.back_requested)
-        bottom_row.addWidget(back_btn)
+        self._back_btn = QPushButton("← 新增歌曲")
+        self._back_btn.clicked.connect(self.back_requested)
+        bottom_row.addWidget(self._back_btn)
         bottom_row.addStretch()
         root.addLayout(bottom_row)
 
@@ -522,19 +528,33 @@ class ResultView(QWidget):
         tot_m, tot_s = divmod(int(total_sec), 60)
         self._time_lbl.setText(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
+    def _active_solo_channel(self):
+        for ch in self._channels:
+            if ch.is_solo_playing():
+                return ch
+        return None
+
     def _on_seek_pressed(self):
         self._seek_dragging = True
 
     def _on_seek_released(self):
         ratio = self._seek_bar.value() / 1000.0
-        self._engine.seek(ratio)
+        solo_ch = self._active_solo_channel()
+        if solo_ch:
+            solo_ch.seek_solo_player(ratio)
+        else:
+            self._engine.seek(ratio)
         for ch in self._channels:
             ch.set_position(ratio)
         self._seek_dragging = False
 
     def _on_waveform_seek(self, ratio: float):
         """波形圖點擊/拖曳 seek。"""
-        self._engine.seek(ratio)
+        solo_ch = self._active_solo_channel()
+        if solo_ch:
+            solo_ch.seek_solo_player(ratio)
+        else:
+            self._engine.seek(ratio)
         for ch in self._channels:
             ch.set_position(ratio)
         self._seek_bar.blockSignals(True)
@@ -635,42 +655,70 @@ class ResultView(QWidget):
             else:
                 ch.set_solo_active(False)
 
-    def _on_download_master(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "儲存混音結果",
-            "mixed_output.mp3",
-            "MP3 檔案 (*.mp3)",
-        )
-        if not path:
-            return
+    def _set_download_lock(self, locked: bool):
+        """下載期間鎖住調性選單和新增歌曲鈕。"""
+        self._back_btn.setEnabled(not locked)
+        self._key_combo.setEnabled(not locked)
 
+    def _on_download_master(self):
+        self._set_download_lock(True)
         self._dl_master_btn.setText("處理中...")
         self._dl_master_btn.setEnabled(False)
+        self._dl_master_audio = None
+        self._dl_master_sr = None
+        self._dl_master_prepare_error = ''
 
-        def _work():
-            error = ''
+        def _prepare():
             try:
                 master_vol = self._master_vol_slider.value() / 100.0
                 export_audios = {i: self._engine.get_export_audio(i)
                                  for i in range(len(self._tracks))}
-                audio, sr = mix_tracks(
+                self._dl_master_audio, self._dl_master_sr = mix_tracks(
                     self._tracks,
                     master_volume=master_vol,
                     speed=self._engine.speed,
                     metronome_track=self._metronome_track,
                     export_audios=export_audios,
                 )
+            except Exception as e:
+                self._dl_master_prepare_error = str(e)
+            self._dl_master_ready_sig.emit()
+
+        threading.Thread(target=_prepare, daemon=True).start()
+
+    def _on_download_master_ready(self):
+        if self._dl_master_prepare_error:
+            QMessageBox.critical(self, "匯出失敗", self._dl_master_prepare_error)
+            self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
+            self._set_download_lock(False)
+            return
+
+        default_name = f"{self._file_title}_mixed.mp3" if self._file_title else "mixed_output.mp3"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "儲存混音結果", default_name, "MP3 檔案 (*.mp3)")
+        if not path:
+            self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
+            self._dl_master_btn.setEnabled(True)
+            self._set_download_lock(False)
+            return
+
+        audio, sr = self._dl_master_audio, self._dl_master_sr
+
+        def _save():
+            error = ''
+            try:
                 export_mp3(audio, sr, path, bitrate="320k")
             except Exception as e:
                 error = str(e)
             self._dl_master_done_sig.emit(error, path)
 
-        threading.Thread(target=_work, daemon=True).start()
+        threading.Thread(target=_save, daemon=True).start()
 
     def _on_download_master_done(self, error: str, path: str):
         self._dl_master_btn.setText("⬇ 下載混音 MP3 320k")
         self._dl_master_btn.setEnabled(True)
+        self._set_download_lock(False)
         if error:
             QMessageBox.critical(self, "匯出失敗", error)
         else:
