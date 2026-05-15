@@ -187,20 +187,29 @@ class SeparatorThread(QThread):
             orig_threads = torch.get_num_threads()
             torch.set_num_threads(max(1, orig_threads // N))
             pool = ThreadPoolExecutor(max_workers=N)
-            futures = [pool.submit(_process_chunk, meta) for meta in chunks_meta]
-            chunk_results = []
+            future_to_idx = {pool.submit(_process_chunk, meta): i for i, meta in enumerate(chunks_meta)}
+            chunk_results = [None] * len(chunks_meta)
             pool_error = None
+
             try:
-                for f in futures:
-                    if self._cancelled:
-                        break
-                    chunk_results.append(f.result())
+                from concurrent.futures import wait, ALL_COMPLETED
+                pending = set(future_to_idx.keys())
+                while pending and not self._cancelled:
+                    done, pending = wait(pending, timeout=0.2)
+                    for f in done:
+                        try:
+                            idx = future_to_idx[f]
+                            chunk_results[idx] = f.result()
+                        except Exception as e:
+                            pool_error = e
+                            raise
             except Exception as e:
-                pool_error = e
+                if pool_error is None:
+                    pool_error = e
             finally:
-                # wait=False：不等正在跑的塊，立刻返回；cancel_futures=True：取消尚未開始的塊
                 pool.shutdown(wait=False, cancel_futures=True)
                 torch.set_num_threads(orig_threads)
+            chunk_results = [r for r in chunk_results if r is not None]
 
             if self._cancelled:
                 # 將模型移回 CPU 以立即釋放 GPU 記憶體，避免新分源 OOM
