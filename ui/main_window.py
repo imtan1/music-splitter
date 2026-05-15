@@ -288,9 +288,9 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._import_page)
 
     def _start_separation(self, file_path: str, stems: list[str]):
-        # 前一個線程若還在清理，直接停止它（不等待，避免主線程阻塞）
+        # 強行停止前一個線程（立即返回，不阻塞）
         if self._thread and self._thread.isRunning():
-            self._thread.quit()
+            self._thread.terminate()  # 比 quit() 更激進，立即停止
 
         self._progress_dialog = ProgressDialog(self)
         self._progress_dialog.show()
