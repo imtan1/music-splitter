@@ -2,6 +2,7 @@ import sys
 import os
 import threading
 import subprocess
+import multiprocessing
 
 # Windows 上所有 subprocess（ffmpeg、demucs AudioFile 等）隱藏終端機視窗
 if sys.platform == 'win32':
@@ -54,4 +55,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # 必要：PyInstaller 打包後 spawn 模式需要此呼叫，否則子進程會無限遞迴啟動
+    multiprocessing.freeze_support()
     main()
